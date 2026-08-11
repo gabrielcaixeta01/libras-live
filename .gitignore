@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Landmarks extraídos e datasets baixados — regeráveis, pesados
+data/
+
+# Modelo do MediaPipe (7.8MB, baixado por scripts/download_model.sh)
+models/hand_landmarker.task
+
+# Classificador treinado — regerado por training/train.py, muda a cada treino
+models/classifier.joblib
+
+.DS_Store
+.idea/
+.vscode/
