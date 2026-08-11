@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from libras import config
 from libras.landmarks import DetectorImagem
+from libras.recovery import detectar_com_tentativas
 
 URL_ZIP = (
     "https://github.com/biankatpas/Brazilian-Sign-Language-Alphabet-Dataset"
@@ -59,10 +60,15 @@ def baixar() -> Path:
 
 
 def extrair_landmarks(dir_dataset: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Roda o MediaPipe em cada imagem. Imagens sem mão detectável são puladas."""
+    """Roda o MediaPipe em cada imagem, com segunda chance quando ele falha.
+
+    Uma imagem só é descartada depois que todas as variantes de `recovery`
+    falharam. É daí que saem as amostras de M e N, que a passagem única perdia.
+    """
     vetores: list[np.ndarray] = []
     rotulos: list[str] = []
     puladas: Counter[str] = Counter()
+    resgates: Counter[str] = Counter()
 
     letras = sorted(p.name for p in dir_dataset.iterdir() if p.is_dir())
     print(f"Letras encontradas: {' '.join(letras)}")
@@ -74,6 +80,7 @@ def extrair_landmarks(dir_dataset: Path) -> tuple[np.ndarray, np.ndarray]:
                 if p.suffix.lower() in EXTENSOES
             )
             aproveitadas = 0
+            resgatadas = 0
 
             for caminho in imagens:
                 imagem = cv2.imread(str(caminho))
@@ -82,11 +89,17 @@ def extrair_landmarks(dir_dataset: Path) -> tuple[np.ndarray, np.ndarray]:
                     continue
 
                 rgb = cv2.cvtColor(imagem, cv2.COLOR_BGR2RGB)
-                deteccao = detector.detectar(np.ascontiguousarray(rgb))
+                deteccao, variante = detectar_com_tentativas(
+                    detector, np.ascontiguousarray(rgb)
+                )
 
                 if deteccao is None:
                     puladas[letra] += 1
                     continue
+
+                if variante != "original":
+                    resgates[variante] += 1
+                    resgatadas += 1
 
                 vetores.append(deteccao.vetor)
                 rotulos.append(letra)
@@ -94,12 +107,19 @@ def extrair_landmarks(dir_dataset: Path) -> tuple[np.ndarray, np.ndarray]:
 
             total = len(imagens)
             taxa = aproveitadas / total if total else 0.0
-            print(f"  {letra}: {aproveitadas}/{total} imagens ({taxa:.0%})")
+            extra = f"  (+{resgatadas} resgatadas)" if resgatadas else ""
+            print(f"  {letra}: {aproveitadas}/{total} imagens ({taxa:.0%}){extra}")
 
     if not vetores:
         raise RuntimeError("Nenhuma mão detectada em nenhuma imagem.")
 
     print(f"\nTotal aproveitado: {len(vetores)} | puladas: {sum(puladas.values())}")
+
+    if resgates:
+        print(f"Resgatadas por variante ({sum(resgates.values())} no total):")
+        for nome, quantas in resgates.most_common():
+            print(f"  {nome}: {quantas}")
+
     return np.array(vetores, dtype=np.float32), np.array(rotulos)
 
 
