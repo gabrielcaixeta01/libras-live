@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from libras.sinais import pose, sequencia
-from libras.sinais.dicionario import Dicionario
-from libras.sinais.segmenter import Estado, Segmentador
-from tests.sinais.apoio import corpo, frame, mao
+from libras import pose, sequencia
+from libras.dicionario import Dicionario
+from libras.segmenter import Estado, Segmentador
+from tests.apoio import corpo, frame, mao
 
 FPS = 30.0
 DT = 1.0 / FPS

@@ -1,32 +1,22 @@
 """Mede o dicionário de sinais com leave-one-articulator-out.
-
     python training/eval_sinais.py
-
 Indexa com dois articuladores, consulta com o terceiro, três vezes. É o único
 protocolo honesto com uma base de três pessoas: qualquer divisão aleatória
 deixaria o mesmo articulador dos dois lados, e o placar mediria memorização de
 pessoa — o mesmo erro que a fase 1 cometeu com o L↔G.
-
 O relatório vai para `models/relatorio_sinais.txt` e é ele que decide se o
 encoder neural vale o torch: a baseline DTW registra aqui o número que o
 encoder precisa bater.
 """
-
 from __future__ import annotations
-
 import argparse
 import sys
 import time
 from collections import Counter
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from libras import config  # noqa: E402
-from libras.sinais import avaliacao, catalogo  # noqa: E402
-from libras.sinais.dicionario import Dicionario  # noqa: E402
-
-
+from libras import avaliacao, catalogo, config  # noqa: E402
+from libras.dicionario import Dicionario  # noqa: E402
 def montar_relatorio(
     dicionario: Dicionario,
     resultados: dict[str, avaliacao.Metricas],
@@ -50,11 +40,9 @@ def montar_relatorio(
         "-" * 72,
         "",
     ]
-
     for fonte, metricas in resultados.items():
         rotulo = "TOTAL" if fonte == "total" else f"sem {fonte}"
         linhas.append(f"  {rotulo:<16s} {metricas}")
-
     total = resultados["total"]
     linhas += [
         "",
@@ -76,8 +64,6 @@ def montar_relatorio(
         "",
     ]
     return "\n".join(linhas)
-
-
 def _veredito_sobre_o_encoder(total: avaliacao.Metricas) -> str:
     if total.recall_5 >= 0.80:
         return (
@@ -89,37 +75,28 @@ def _veredito_sobre_o_encoder(total: avaliacao.Metricas) -> str:
         "A baseline DTW não sustenta o produto sozinha. É aqui que o encoder\n"
         "neural com metric learning se justifica: ele tem este número para bater."
     )
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dicionario", type=Path, default=config.DICIONARIO_SINAIS)
     ap.add_argument("--saida", type=Path, default=config.RELATORIO_SINAIS)
     ap.add_argument("--k", type=int, default=config.CANDIDATOS_NA_TELA)
     args = ap.parse_args()
-
     if not args.dicionario.exists():
         print(
             f"dicionário não encontrado em {args.dicionario}\n"
             "Rode antes: python training/prepare_sinais.py --videos <raiz>"
         )
         raise SystemExit(1)
-
     dicionario = Dicionario.carregar(args.dicionario)
     print(f"{len(dicionario)} protótipos, {len(dicionario.vocabulario)} sinais")
     print(f"rodízio por articulador: {', '.join(dicionario.fontes)}\n")
-
     inicio = time.time()
     resultados = avaliacao.leave_one_articulator_out(dicionario, k=args.k)
     segundos = time.time() - inicio
-
     relatorio = montar_relatorio(dicionario, resultados, segundos)
     print(relatorio)
-
     args.saida.parent.mkdir(parents=True, exist_ok=True)
     args.saida.write_text(relatorio, encoding="utf-8")
     print(f"relatório salvo em {args.saida}")
-
-
 if __name__ == "__main__":
     main()

@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from libras.sinais import avaliacao
-from libras.sinais.dicionario import Candidato, Dicionario
+from libras import avaliacao
+from libras.dicionario import Candidato, Dicionario
 
 
 def candidatos(*rotulos: str) -> list[Candidato]:

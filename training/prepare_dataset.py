@@ -24,8 +24,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from libras import config
-from libras.landmarks import DetectorImagem
-from libras.recovery import detectar_com_tentativas
+from libras.alfabeto.landmarks import DetectorImagem
+from libras.alfabeto.recovery import detectar_com_tentativas
 
 URL_ZIP = (
     "https://github.com/biankatpas/Brazilian-Sign-Language-Alphabet-Dataset"

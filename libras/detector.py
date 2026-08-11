@@ -21,12 +21,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import mediapipe as mp
 import numpy as np
-from mediapipe.tasks.python import BaseOptions
-from mediapipe.tasks.python import vision
 
-from .. import config
+from . import config, mediapipe_io
 from . import pose
 
 
@@ -47,7 +44,7 @@ class DeteccaoSinal:
         return self.corpo_cru is not None
 
 
-class DetectorSinais:
+class DetectorSinais(mediapipe_io.Landmarker):
     """HandLandmarker (duas mãos) + PoseLandmarker, no modo vídeo.
 
         with DetectorSinais() as detector:
@@ -60,36 +57,17 @@ class DetectorSinais:
         caminho_pose=None,
         confianca_minima: float = 0.5,
     ):
-        maos = caminho_maos or config.MODELO_MAOS
-        corpo = caminho_pose or config.MODELO_POSE
-
-        for caminho in (maos, corpo):
-            if not caminho.exists():
-                raise FileNotFoundError(
-                    f"Modelo do MediaPipe não encontrado em {caminho}.\n"
-                    "Rode: bash scripts/download_model.sh"
-                )
-
-        self._maos = vision.HandLandmarker.create_from_options(
-            vision.HandLandmarkerOptions(
-                base_options=BaseOptions(model_asset_path=str(maos)),
-                running_mode=vision.RunningMode.VIDEO,
-                num_hands=2,
-                min_hand_detection_confidence=confianca_minima,
-                min_hand_presence_confidence=confianca_minima,
-                min_tracking_confidence=confianca_minima,
-            )
+        self._maos = mediapipe_io.landmarker_de_maos(
+            caminho_maos or config.MODELO_MAOS,
+            num_maos=2,
+            confianca=confianca_minima,
+            em_video=True,
         )
-        self._pose = vision.PoseLandmarker.create_from_options(
-            vision.PoseLandmarkerOptions(
-                base_options=BaseOptions(model_asset_path=str(corpo)),
-                running_mode=vision.RunningMode.VIDEO,
-                num_poses=1,
-                min_pose_detection_confidence=confianca_minima,
-                min_pose_presence_confidence=confianca_minima,
-                min_tracking_confidence=confianca_minima,
-            )
+        self._pose = mediapipe_io.landmarker_de_pose(
+            caminho_pose or config.MODELO_POSE,
+            confianca=confianca_minima,
         )
+        self._recursos = (self._maos, self._pose)
 
     def detectar(
         self,
@@ -97,7 +75,7 @@ class DetectorSinais:
         timestamp_ms: int,
         video_espelhado: bool = False,
     ) -> DeteccaoSinal:
-        imagem = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+        imagem = mediapipe_io.imagem(frame_rgb)
 
         resultado_maos = self._maos.detect_for_video(imagem, timestamp_ms)
         resultado_pose = self._pose.detect_for_video(imagem, timestamp_ms)
@@ -125,21 +103,16 @@ class DetectorSinais:
         cruas: list[np.ndarray] = []
 
         for i, marcos in enumerate(resultado.hand_landmarks):
-            pontos = np.array([[m.x, m.y, m.z] for m in marcos], dtype=np.float32)
+            pontos = mediapipe_io.pontos(marcos)
             cruas.append(pontos)
 
-            categorias = resultado.handedness[i] if resultado.handedness else []
-            if not categorias:
+            if not resultado.handedness:
                 continue
 
-            e_esquerda = categorias[0].category_name == "Left"
-            if video_espelhado:
-                e_esquerda = not e_esquerda
-
-            if e_esquerda and esquerda is None:
-                esquerda = pontos
-            elif not e_esquerda and direita is None:
-                direita = pontos
+            if mediapipe_io.e_mao_esquerda(resultado.handedness, i, video_espelhado):
+                esquerda = pontos if esquerda is None else esquerda
+            else:
+                direita = pontos if direita is None else direita
 
         return esquerda, direita, cruas
 
@@ -147,15 +120,4 @@ class DetectorSinais:
     def _extrair_corpo(resultado) -> np.ndarray | None:
         if not resultado.pose_landmarks:
             return None
-        marcos = resultado.pose_landmarks[0]
-        return np.array([[m.x, m.y, m.z] for m in marcos], dtype=np.float32)
-
-    def fechar(self) -> None:
-        self._maos.close()
-        self._pose.close()
-
-    def __enter__(self) -> "DetectorSinais":
-        return self
-
-    def __exit__(self, *_) -> None:
-        self.fechar()
+        return mediapipe_io.pontos(resultado.pose_landmarks[0])

@@ -6,7 +6,7 @@ mantém a classe pura e os testes determinísticos.
 
 from __future__ import annotations
 
-from . import config
+from .. import config
 
 
 class Soletrador:

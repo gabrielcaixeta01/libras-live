@@ -1,14 +1,14 @@
 import numpy as np
 import pytest
 
-from libras.augment import (
+from libras.alfabeto.augment import (
     equilibrar,
     escalar_profundidade,
     perturbar,
     rotacionar,
     variar,
 )
-from libras.landmarks import NUM_PONTOS, TAMANHO_VETOR, normalizar
+from libras.alfabeto.landmarks import NUM_PONTOS, TAMANHO_VETOR, normalizar
 
 
 def mao_falsa(semente: int = 0) -> np.ndarray:

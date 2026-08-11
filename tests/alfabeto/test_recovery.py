@@ -2,8 +2,8 @@ import cv2
 import numpy as np
 import pytest
 
-from libras.landmarks import NUM_PONTOS, Deteccao, normalizar
-from libras.recovery import (
+from libras.alfabeto.landmarks import NUM_PONTOS, Deteccao, normalizar
+from libras.alfabeto.recovery import (
     VARIANTES,
     aplicar_afim,
     desespelhar,

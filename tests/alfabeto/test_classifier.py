@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from libras.classifier import Classificador, ModeloAusente, Predicao
+from libras.alfabeto.classifier import Classificador, ModeloAusente, Predicao
 
 
 class ModeloFalso:

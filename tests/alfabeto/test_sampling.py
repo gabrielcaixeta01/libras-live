@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from libras.sampling import ColetorDiverso
+from libras.alfabeto.sampling import ColetorDiverso
 
 
 def vetor(valor: float) -> np.ndarray:

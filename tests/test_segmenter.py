@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 
-from libras.sinais import pose
-from libras.sinais.segmenter import Estado, Segmentador
-from tests.sinais.apoio import corpo, frame, mao
+from libras import pose
+from libras.segmenter import Estado, Segmentador
+from tests.apoio import corpo, frame, mao
 
 FPS = 30.0
 DT = 1.0 / FPS

@@ -1,4 +1,4 @@
-from libras.stabilizer import Estabilizador
+from libras.alfabeto.stabilizer import Estabilizador
 
 
 def alimentar(est, letra, confianca, vezes):

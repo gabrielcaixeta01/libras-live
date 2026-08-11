@@ -15,7 +15,7 @@ sai da sua máquina.
 ```
 python -m libras.app              # soletrar: sua mão vira texto
 python -m libras.app --praticar   # praticar: ele pede a letra, você faz
-python -m libras.app --sinais      # dicionário: você sinaliza, ele traduz
+python -m libras.app --sinais     # dicionário: você sinaliza, ele traduz
 ```
 
 ---
@@ -73,7 +73,7 @@ frame → 21 landmarks da mão → normalizar → classificar → estabilizar �
 O classificador **nunca vê a imagem**. Essa é a decisão de arquitetura que
 sustenta todo o resto.
 
-### 1. Landmarks — [`libras/landmarks.py`](libras/landmarks.py)
+### 1. Landmarks — [`libras/alfabeto/landmarks.py`](libras/alfabeto/landmarks.py)
 
 O [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
 extrai 21 pontos 3D da mão a partir do frame. É um modelo pronto, treinado pelo
@@ -97,7 +97,7 @@ iluminação, cor de pele, posição na tela e distância da câmera. É também
 isso que ele é minúsculo e roda em CPU — o trabalho pesado já foi feito pelo
 MediaPipe.
 
-### 3. Classificação — [`libras/classifier.py`](libras/classifier.py)
+### 3. Classificação — [`libras/alfabeto/classifier.py`](libras/alfabeto/classifier.py)
 
 Um classificador do scikit-learn mapeia os 63 floats numa das 26 letras, com
 probabilidade. Detalhes do treino em [O treinamento](#o-treinamento).
@@ -108,7 +108,7 @@ responde a mais parecida entre elas, nunca "não sei". Abaixo de
 faixa de letras no topo da tela mostra apagadas as letras sem dado — o app não
 finge saber o que não sabe.
 
-### 4. Estabilização — [`libras/stabilizer.py`](libras/stabilizer.py)
+### 4. Estabilização — [`libras/alfabeto/stabilizer.py`](libras/alfabeto/stabilizer.py)
 
 É a peça que separa um demo de algo usável. Classificar frame a frame produz
 texto tremido (`AAAABAAAA`), porque uma fração dos frames sempre erra. E segurar
@@ -122,7 +122,7 @@ Uma letra só é confirmada quando:
 Depois de confirmada, ela fica **bloqueada** até a mão mudar de estado. É o que
 impede a letra segurada de repetir.
 
-### 5. Soletração — [`libras/speller.py`](libras/speller.py)
+### 5. Soletração — [`libras/alfabeto/speller.py`](libras/alfabeto/speller.py)
 
 Acumula as letras confirmadas. Tirar a mão de cena por 1,5s insere um espaço —
 é assim que você separa palavras sem tocar no teclado. Um espaço por ausência,
@@ -132,12 +132,14 @@ por mais longa que ela seja.
 
 `landmarks.normalizar`, `stabilizer`, `speller`, `sampling` e `practice` são
 **lógica pura**: numpy entra, numpy sai, nenhum relógio e nenhuma câmera lá
-dentro. O tempo entra sempre por parâmetro. É por isso que 118 testes rodam em
+dentro. O tempo entra sempre por parâmetro. É por isso que 273 testes rodam em
 meio segundo sem webcam e sem modelo treinado — e é por isso que a parte que
 pode dar errado é a parte que está testada.
 
-`camera.py` e `ui.py` são deliberadamente finos: um lê frames, o outro desenha o
-que recebe pronto. Nenhum dos dois decide nada.
+`camera.py`, `mediapipe_io.py`, `desenho.py` e os dois `ui.py` são
+deliberadamente finos: uns leem frames e traduzem o que a biblioteca devolve, os
+outros desenham o que recebem pronto. Nenhum deles decide nada — é por isso que
+não estarem testados não é um buraco.
 
 ---
 
@@ -153,15 +155,15 @@ python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-bash scripts/download_model.sh   # baixa o hand_landmarker do MediaPipe (~7.8MB)
+bash scripts/download_model.sh   # baixa os modelos do MediaPipe (~17MB)
 ```
 
 No macOS, o terminal precisa de permissão de câmera em **Ajustes do Sistema →
 Privacidade e Segurança → Câmera**.
 
-Nem o modelo do MediaPipe nem o classificador treinado são versionados no git
-(são grandes e regeráveis), então um clone novo precisa passar pelos quatro
-passos abaixo.
+Nem os modelos do MediaPipe nem o classificador treinado são versionados no git
+(são grandes e regeráveis), então um clone novo precisa passar pelos passos
+abaixo. O alfabeto usa só o `hand_landmarker`; os sinais usam os dois.
 
 ---
 
@@ -262,7 +264,7 @@ Dataset](https://github.com/biankatpas/Brazilian-Sign-Language-Alphabet-Dataset)
 guardando os vetores de 63 floats. O formato é idêntico ao da coleta pela
 webcam, o que permite misturar as duas fontes sem reconciliar nada.
 
-#### A cascata de recuperação — [`libras/recovery.py`](libras/recovery.py)
+#### A cascata de recuperação — [`libras/alfabeto/recovery.py`](libras/alfabeto/recovery.py)
 
 O MediaPipe falha em imagens de mão fechada, onde os dedos se escondem atrás da
 palma. Na primeira passagem ele achava mão em só **24% das imagens de N** e 53%
@@ -306,7 +308,7 @@ lição aprendida na marra:
 Grave as 26. A base pública continua ajudando com variedade de mãos; suas
 gravações dão a âncora.
 
-#### O filtro de diversidade — [`libras/sampling.py`](libras/sampling.py)
+#### O filtro de diversidade — [`libras/alfabeto/sampling.py`](libras/alfabeto/sampling.py)
 
 **Amostra repetida não conta.** Uma amostra só entra se estiver a pelo menos
 `DISTANCIA_MINIMA_AMOSTRA` de *todas* as que já entraram — amostragem por disco
@@ -361,7 +363,7 @@ Os candidatos que aceitam também recebem `class_weight="balanced"`.
 
 ### Aumento dentro de cada fold, nunca antes de separar
 
-[`libras/augment.py`](libras/augment.py) fabrica variações a partir das amostras
+[`libras/alfabeto/augment.py`](libras/alfabeto/augment.py) fabrica variações a partir das amostras
 reais, no espaço dos landmarks — três transformações, todas seguidas de
 renormalização para que a amostra sintética obedeça às mesmas invariantes que
 uma real:
@@ -483,7 +485,7 @@ apaga a localização apaga a diferença entre as duas palavras.
 | pontos | 21 | 49 (2 mãos + 7 do corpo) |
 
 `landmarks.normalizar` não foi tocado. O app do alfabeto continua idêntico; o
-novo é um pacote irmão em [`libras/sinais/`](libras/sinais/).
+novo mora no topo de [`libras/`](libras/), com o alfabeto recolhido em [`libras/alfabeto/`](libras/alfabeto/).
 
 ### O pipeline
 
@@ -492,13 +494,13 @@ webcam → 49 landmarks → segmentar por repouso → imputar buracos
        → normalizar no corpo → reamostrar p/ 32 frames → buscar → top-5
 ```
 
-**Segmentação automática** — [`sinais/segmenter.py`](libras/sinais/segmenter.py).
+**Segmentação automática** — [`sinais/segmenter.py`](libras/segmenter.py).
 A mão sai do descanso, o sinal começa; a mão para, ele acaba e vai para a busca.
 Mesmo espírito do "espaço por ausência" do alfabeto: sem tocar no teclado. A
 velocidade é medida em **larguras de ombro por segundo**, não em pixels — senão
 chegar perto da câmera dispararia sinais sozinho.
 
-**Imputação por spline** — [`sinais/sequencia.py`](libras/sinais/sequencia.py).
+**Imputação por spline** — [`sinais/sequencia.py`](libras/sequencia.py).
 O MediaPipe perde a mão quando ela cruza o corpo ou fecha. Num frame isolado
 isso é fatal; numa sequência não, porque os vizinhos no tempo sabem onde ela
 estava. Nunca por extrapolação: nas bordas o valor é travado, porque spline
@@ -599,32 +601,39 @@ dados de verdade.
 
 ## Estrutura do projeto
 
+Os **sinais ocupam o topo do pacote** e o alfabeto se recolhe num subpacote. O
+layout responde qual dos dois é o projeto sem que ninguém precise perguntar.
+
 ```
 libras/
-  app.py          loop principal do alfabeto: liga tudo e desenha
-  app_sinais.py   loop do dicionário reverso
-  camera.py       captura da webcam (fino)
-  landmarks.py    MediaPipe + a normalização dos 21 pontos
-  classifier.py   carrega o modelo treinado, prediz e rejeita
-  stabilizer.py   decide quando uma predição vira letra
-  speller.py      acumula letras em texto, espaço por ausência
-  practice.py     sessão do modo prática (lógica pura)
-  sampling.py     filtro de diversidade da coleta (lógica pura)
-  augment.py      aumento de dados no espaço dos landmarks
-  recovery.py     cascata de variantes para imagens difíceis
-  ui.py           desenho do overlay do alfabeto (fino)
-  ui_sinais.py    desenho do overlay do dicionário (fino)
-  config.py       todos os parâmetros ajustáveis
+  app.py           só o CLI: lê os argumentos e escolhe o modo
+  app_sinais.py    o laço do dicionário reverso
+  pose.py          os 49 pontos e a normalização ancorada no corpo
+  sequencia.py     imputação por spline, reamostragem, validade
+  segmenter.py     quando um sinal começa e quando acaba
+  dtw.py           distância com alinhamento temporal, em lote
+  dicionario.py    protótipos, busca top-5, re-ancoragem
+  avaliacao.py     recall@1/@5, MRR, leave-one-articulator-out
+  catalogo.py      rótulo e articulador a partir do caminho do vídeo
+  detector.py      MediaPipe 2 mãos + pose (fino)
+  ui.py            overlay do dicionário (fino)
 
-  sinais/
-    pose.py       os 49 pontos e a normalização ancorada no corpo
-    sequencia.py  imputação por spline, reamostragem, validade
-    segmenter.py  quando um sinal começa e quando acaba
-    dtw.py        distância com alinhamento temporal, em lote
-    dicionario.py protótipos, busca top-5, re-ancoragem
-    avaliacao.py  recall@1/@5, MRR, leave-one-articulator-out
-    catalogo.py   rótulo e articulador a partir do caminho do vídeo
-    detector.py   MediaPipe 2 mãos + pose (fino)
+  config.py        parâmetros dos dois modos           ─┐
+  camera.py        captura da webcam (fino)             │ compartilhado
+  desenho.py       cores, fonte e faixas (fino)         │
+  mediapipe_io.py  primitivas do MediaPipe            ─┘
+
+  alfabeto/        a fase 1, inteira
+    app.py         o laço da datilologia
+    landmarks.py   MediaPipe + a normalização dos 21 pontos
+    classifier.py  carrega o modelo treinado, prediz e rejeita
+    stabilizer.py  decide quando uma predição vira letra
+    speller.py     acumula letras em texto, espaço por ausência
+    practice.py    sessão do modo prática (lógica pura)
+    sampling.py    filtro de diversidade da coleta (lógica pura)
+    augment.py     aumento de dados no espaço dos landmarks
+    recovery.py    cascata de variantes para imagens difíceis
+    ui.py          overlay do alfabeto (fino)
 
 training/
   prepare_dataset.py   baixa a base pública e extrai landmarks
@@ -633,11 +642,19 @@ training/
   prepare_sinais.py    extrai os vídeos do V-LIBRASIL
   eval_sinais.py       leave-one-articulator-out
 
-tests/            260 testes, sem câmera, sem vídeo e sem modelo
+tests/            273 testes, espelhando a mesma divisão
 scripts/          download dos modelos do MediaPipe
 models/           hand_landmarker.task, pose_landmarker.task, classifier.joblib
 data/             dataset_publico.npz, coletados/*.npy, sinais/, raw/
 ```
+
+**Por que `mediapipe_io.py` existe.** Três detectores vivem aqui — uma mão em
+vídeo (alfabeto), uma mão em foto solta (base pública) e duas mãos mais o corpo
+(sinais) — e os três repetiam a mesma conferência de modelo, a mesma montagem de
+array e a mesma leitura de lateralidade. Código que envolve biblioteca externa
+envelhece mal em triplicata: o MediaPipe já quebrou a API uma vez, na 1.0,
+levando junto o `mp.solutions` inteiro. Da próxima, a correção acontece num
+lugar.
 
 `data/` e os modelos não são versionados — são regeráveis e pesados.
 
@@ -680,7 +697,7 @@ Do modo sinais:
 python -m pytest tests/ -q
 ```
 
-260 testes, menos de 1s, sem câmera, sem vídeo, sem dataset e sem modelo
+273 testes, menos de 1s, sem câmera, sem vídeo, sem dataset e sem modelo
 treinado. Cobrem normalização (das duas), estabilização, soletração, aumento de
 dados, recuperação de imagens, rejeição, diversidade da coleta, modo prática,
 imputação temporal, segmentação de sinais, DTW, busca no dicionário,

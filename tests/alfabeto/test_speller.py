@@ -1,4 +1,4 @@
-from libras.speller import Soletrador
+from libras.alfabeto.speller import Soletrador
 
 
 def test_comeca_vazio():

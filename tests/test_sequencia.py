@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from libras.sinais import pose, sequencia
-from tests.sinais.apoio import gravacao as bruta
+from libras import pose, sequencia
+from tests.apoio import gravacao as bruta
 
 
 # --- validade ---

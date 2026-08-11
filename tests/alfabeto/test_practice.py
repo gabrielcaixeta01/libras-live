@@ -1,6 +1,6 @@
 import pytest
 
-from libras.practice import Pratica
+from libras.alfabeto.practice import Pratica
 
 LETRAS = list("ABCDE")
 

@@ -29,10 +29,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from libras import config, ui
+from libras import config
+from libras.alfabeto import ui
 from libras.camera import Camera, CameraIndisponivel
-from libras.landmarks import DetectorMaos
-from libras.sampling import ColetorDiverso
+from libras.alfabeto.landmarks import DetectorMaos
+from libras.alfabeto.sampling import ColetorDiverso
 
 DIR_SAIDA = config.DIR_DADOS / "coletados"
 ESC = 27

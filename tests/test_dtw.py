@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from libras.sinais import dtw
+from libras import dtw
 
 
 def rampa(n: int = 32, direcao=(1.0, 0.0)) -> np.ndarray:

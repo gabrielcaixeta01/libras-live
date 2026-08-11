@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from libras.sinais.dicionario import Dicionario
+from libras.dicionario import Dicionario
 
 
 def traj(inclinacao: float, n: int = 16) -> np.ndarray:

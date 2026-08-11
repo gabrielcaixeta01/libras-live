@@ -1,6 +1,6 @@
 import pytest
 
-from libras.sinais import catalogo
+from libras import catalogo
 
 
 # --- rótulo ---

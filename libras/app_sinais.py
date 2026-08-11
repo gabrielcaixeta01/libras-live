@@ -20,12 +20,11 @@ import time
 
 import cv2
 
-from . import config, ui, ui_sinais
+from . import config, desenho, sequencia, ui
 from .camera import Camera, CameraIndisponivel
-from .sinais import sequencia
-from .sinais.detector import DetectorSinais
-from .sinais.dicionario import FONTE_USUARIO, Dicionario
-from .sinais.segmenter import Estado, Segmentador
+from .detector import DetectorSinais
+from .dicionario import FONTE_USUARIO, Dicionario
+from .segmenter import Estado, Segmentador
 
 ESC = 27
 TECLA_LIMPAR = ord("c")
@@ -135,10 +134,10 @@ def executar() -> int:
             if agora - instante_resultado > config.SEGUNDOS_MOSTRANDO:
                 candidatos = []
 
-            ui_sinais.desenhar_esqueleto(
+            ui.desenhar_esqueleto(
                 frame_bgr, deteccao.maos_cruas, deteccao.corpo_cru
             )
-            ui_sinais.desenhar_estado(
+            ui.desenhar_estado(
                 frame_bgr,
                 segmentador.estado,
                 segmentador.progresso,
@@ -146,11 +145,11 @@ def executar() -> int:
             )
 
             if candidatos:
-                ui_sinais.desenhar_candidatos(frame_bgr, candidatos, AJUDA)
+                ui.desenhar_candidatos(frame_bgr, candidatos, AJUDA)
             elif not deteccao.tem_corpo:
-                ui_sinais.desenhar_aviso(frame_bgr, "corpo fora de quadro — afaste-se")
+                ui.desenhar_aviso(frame_bgr, "corpo fora de quadro — afaste-se")
 
-            ui.desenhar_fps(frame_bgr, fps)
+            desenho.desenhar_fps(frame_bgr, fps)
             cv2.imshow("libras-live — dicionário", frame_bgr)
 
             tecla = cv2.waitKey(1) & 0xFF

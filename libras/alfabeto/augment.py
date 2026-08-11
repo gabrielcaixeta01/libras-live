@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import config
+from .. import config
 from .landmarks import NUM_PONTOS, TAMANHO_VETOR, normalizar
 
 

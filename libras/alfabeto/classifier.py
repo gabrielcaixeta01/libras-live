@@ -8,7 +8,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 
-from . import config
+from .. import config
 
 
 class ModeloAusente(FileNotFoundError):

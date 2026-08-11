@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections import Counter, deque
 
-from . import config
+from .. import config
 
 
 class Estabilizador:

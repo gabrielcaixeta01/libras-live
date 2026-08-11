@@ -42,7 +42,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
 from libras import config
-from libras.augment import equilibrar
+from libras.alfabeto.augment import equilibrar
 
 DIR_COLETADOS = config.DIR_DADOS / "coletados"
 DATASET_PUBLICO = config.DIR_DADOS / "dataset_publico.npz"

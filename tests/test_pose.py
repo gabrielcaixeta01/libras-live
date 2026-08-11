@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from libras.sinais import pose
-from tests.sinais.apoio import corpo, frame, mao
+from libras import pose
+from tests.apoio import corpo, frame, mao
 
 
 # --- montagem do frame ---

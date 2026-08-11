@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from libras.landmarks import NUM_PONTOS, TAMANHO_VETOR, normalizar
+from libras.alfabeto.landmarks import NUM_PONTOS, TAMANHO_VETOR, normalizar
 
 
 def mao_falsa(semente: int = 0) -> np.ndarray:

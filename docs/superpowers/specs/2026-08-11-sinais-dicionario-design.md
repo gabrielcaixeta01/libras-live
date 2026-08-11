@@ -70,7 +70,8 @@ informação.
 | mãos | 1 | 2 |
 
 `landmarks.normalizar` fica **intacto**. O app do alfabeto continua funcionando
-sem alteração; o novo é um pacote irmão em `libras/sinais/`.
+sem alteração; ele foi recolhido em `libras/alfabeto/` e os sinais ocupam o topo
+do pacote.
 
 ---
 
@@ -213,21 +214,40 @@ resultado bom, não um consolo.
 
 ## Módulos
 
+Os sinais ocupam o topo do pacote e o alfabeto se recolhe num subpacote — o
+layout diz qual dos dois é o projeto:
+
 ```
-libras/sinais/
+libras/
+  app.py          só o CLI: lê argumentos e escolhe o modo
+  app_sinais.py   o laço do dicionário
   pose.py         subconjunto de 49 landmarks + normalização no corpo (pura)
   sequencia.py    imputação spline, reamostragem, validade (pura)
   segmenter.py    início/fim de sinal por repouso (pura)
   dtw.py          DTW em lote com banda (pura)
   dicionario.py   protótipos, busca top-5, re-ancoragem (pura + npz)
+  avaliacao.py    recall@1/@5, MRR, leave-one-articulator-out (pura)
+  catalogo.py     rótulo e articulador a partir do caminho (pura)
   detector.py     MediaPipe 2 mãos + pose (fino, não testado)
+  ui.py           overlay do dicionário (fino)
+
+  config.py       compartilhado
+  camera.py       compartilhado (fino)
+  desenho.py      cores, fonte e faixas — compartilhado (fino)
+  mediapipe_io.py primitivas do MediaPipe — compartilhado
+
+  alfabeto/       a fase 1, inteira e intocada no comportamento
 
 training/
   prepare_sinais.py   extrai landmarks dos vídeos do V-LIBRASIL
   eval_sinais.py      leave-one-articulator-out, recall@1/@5/MRR
-
-libras/app.py --sinais    modo dicionário reverso
 ```
+
+`mediapipe_io.py` existe porque três detectores (uma mão em vídeo, uma mão em
+imagem, duas mãos mais pose) repetiam a mesma conferência de modelo, a mesma
+montagem de array e a mesma leitura de lateralidade. Código que envolve
+biblioteca externa envelhece mal em triplicata: o MediaPipe já quebrou a API uma
+vez, na 1.0, levando o `mp.solutions` inteiro.
 
 Tudo que decide alguma coisa é lógica pura e testado sem câmera, sem vídeo e sem
 dataset — mesma regra da fase 1.

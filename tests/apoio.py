@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from libras.sinais import pose
+from libras import pose
 
 
 def mao(valor: float = 0.5) -> np.ndarray:

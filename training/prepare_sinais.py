@@ -31,10 +31,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from libras import config  # noqa: E402
-from libras.sinais import catalogo, sequencia  # noqa: E402
-from libras.sinais.detector import DetectorSinais  # noqa: E402
-from libras.sinais.dicionario import Dicionario  # noqa: E402
+
+from libras import catalogo, config, sequencia  # noqa: E402
+from libras.detector import DetectorSinais  # noqa: E402
+from libras.dicionario import Dicionario  # noqa: E402
 
 LARGURA_PROCESSAMENTO = 640  # 1440p não melhora landmark e custa 5x mais tempo
 SALVAR_A_CADA = 100
