@@ -70,16 +70,32 @@ girada, e desfaz a transformação nos pontos quando alguma variante funciona.
 São 377 imagens recuperadas assim, quase todas de mão fechada — **N sozinha vai
 de 37 para 138 amostras**.
 
-**2. Gravar as 11 letras que faltam** (~15 min)
+**2. Gravar as suas amostras**
 
 ```bash
-python training/collect.py
+python training/collect.py            # tudo que ainda falta
+python training/collect.py --revisar  # diagnóstico do que já foi gravado
 ```
 
-Grava F G H J K P Q T X Y Z pela webcam, 200 amostras cada. Dá para parar no meio
-e continuar depois — o script pula o que já gravou. Mexa a mão devagar enquanto
-grava: gire o pulso, aproxime e afaste. Amostras idênticas ensinam o modelo a
-reconhecer uma pose exata em vez da letra.
+Onze letras (F G H J K P Q T X Y Z) não existem na base pública e **só** podem
+vir daqui. As outras quinze existem, mas como fotos de estúdio de mãos de outras
+pessoas — e isso desequilibra o reconhecimento: uma letra com 200 amostras da
+sua mão ganha de uma letra com 150 amostras de mãos estranhas, mesmo quando a
+forma está certa. Foi assim que o L (só estúdio) começou a sair como G (só
+webcam). Vale gravar as 26.
+
+Nada de imagem sai daqui: cada frame vira 21 pontos e é descartado. O arquivo
+salvo tem só os 63 floats por amostra.
+
+**Amostra repetida não conta.** Uma amostra só entra se estiver a pelo menos
+`DISTANCIA_MINIMA_AMOSTRA` de todas as que já entraram, então mexer a mão não é
+conselho — é o que faz a barra andar. Gire o pulso, aproxime e afaste, incline.
+Se a barra travar, a tela avisa.
+
+Isso existe porque a primeira coleta não tinha o filtro: 200 amostras saíam em
+oito segundos e a nuvem da letra ficava com raio 0,12, contra 0,64 das letras de
+estúdio. O modelo decorava a pose exata em vez da letra. O `--revisar` mostra o
+raio de cada gravação e aponta quais vale regravar.
 
 **3. Treinar**
 
@@ -124,21 +140,33 @@ Tudo em [`libras/config.py`](libras/config.py). Os três que importam:
 - `TAMANHO_BUFFER` (15) — maior deixa mais estável e mais lento.
 - `CONFIANCA_MINIMA` (0.70) — maior erra menos e engole mais letras.
 - `CONFIANCA_REJEICAO` (0.55) — abaixo disso a predição vira `?` e é ignorada.
+- `DISTANCIA_MINIMA_AMOSTRA` (0.12) — quão diferentes as amostras da coleta
+  precisam ser entre si.
 
 ## Estado atual
 
-Treinado só com a base pública, o modelo cobre **15 das 26 letras** (A B C D E I
-L M N O R S U V W) e dá **99,6% de macro-F1** no conjunto de teste, que é
-composto só de amostras reais.
+O modelo cobre **as 26 letras** e dá **99,6% de macro-F1** no conjunto de teste.
 
-Esse número mede o quão bem ele aprendeu *aquele dataset*, não o quanto vai
-acertar na sua webcam — as condições são outras. Espere menos na prática, e
-grave amostras suas das letras que estiverem falhando. As piores hoje são W e V
-(98,3% e 98,4%), que o modelo troca entre si.
+**Esse número não descreve o uso real, e a distância entre os dois é o assunto
+em aberto do projeto.** O teste é feito na mesma distribuição do treino: quinze
+letras vêm de fotos de estúdio, onze vêm de uma sessão de webcam. No uso, todo
+frame vem da sua webcam — as quinze letras de estúdio estão fora da
+distribuição, e é lá que aparecem as confusões que a métrica não vê (L saindo
+como G, por exemplo).
 
-As 11 letras restantes (F G H J K P Q T X Y Z) não têm dado nenhum: aparecem
-apagadas na faixa do topo e o modelo nunca as prevê. Sinalizar uma delas produz
-um `?` ou a letra conhecida mais parecida — grave-as com `collect.py`.
+Duas medidas expõem isso melhor que o macro-F1, e ambas saem de
+`collect.py --revisar` e do relatório de treino:
+
+- **Raio da nuvem de cada letra.** As gravações da primeira sessão ficaram entre
+  0,12 e 0,26 em F G K Q T — pose decorada, não letra aprendida. O filtro de
+  diversidade da coleta existe para isso; essas letras merecem `--refazer`.
+- **Letras de movimento.** J tem raio 1,43 e invade M, C, A e L: as amostras não
+  são uma pose, são uma trajetória inteira achatada num rótulo só. Tratar H J K
+  X Z como pose é a simplificação declarada aqui em cima, e é ela que está
+  chegando ao limite.
+
+O que falta para ter um número honesto: uma sessão de gravação separada, em
+outro dia e outra luz, usada só como teste e nunca no treino.
 
 ## Testes
 
@@ -146,9 +174,9 @@ um `?` ou a letra conhecida mais parecida — grave-as com `collect.py`.
 python -m pytest tests/ -q
 ```
 
-96 testes cobrindo normalização, estabilização, soletração, aumento de dados,
-recuperação de imagens, rejeição e modo prática — toda a lógica que pode dar
-errado, sem precisar de câmera ou modelo treinado.
+118 testes cobrindo normalização, estabilização, soletração, aumento de dados,
+recuperação de imagens, rejeição, diversidade da coleta e modo prática — toda a
+lógica que pode dar errado, sem precisar de câmera ou modelo treinado.
 
 ## Documentação
 

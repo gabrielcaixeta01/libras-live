@@ -51,3 +51,11 @@ ALFABETO = sorted(LETRAS_NO_DATASET + LETRAS_A_COLETAR)
 # --- Coleta (training/collect.py) ---
 AMOSTRAS_POR_LETRA = 200
 SEGUNDOS_PREPARACAO = 3  # contagem regressiva antes de começar a gravar
+
+# Uma amostra só é aceita se estiver a esta distância de todas as já gravadas.
+# É o que impede 200 cópias do mesmo frame: sem isso a coleta termina em 8s e a
+# nuvem da letra fica com raio ~0.12, contra ~0.64 das letras da base pública.
+DISTANCIA_MINIMA_AMOSTRA = 0.12
+PACIENCIA_COLETA = 1.5     # segundos sem aceitar nada antes de afrouxar o limiar
+DECAIMENTO_COLETA = 0.8    # quanto o limiar encolhe a cada afrouxada
+DISPERSAO_ALVO = 0.35      # raio de nuvem considerado saudável, para a UI
