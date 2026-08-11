@@ -10,6 +10,7 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 
 MODELO_MAOS = RAIZ / "models" / "hand_landmarker.task"
+MODELO_POSE = RAIZ / "models" / "pose_landmarker.task"
 MODELO_CLASSIFICADOR = RAIZ / "models" / "classifier.joblib"
 RELATORIO_TREINO = RAIZ / "models" / "relatorio_treino.txt"
 DIR_DADOS = RAIZ / "data"
@@ -59,3 +60,30 @@ DISTANCIA_MINIMA_AMOSTRA = 0.12
 PACIENCIA_COLETA = 1.5     # segundos sem aceitar nada antes de afrouxar o limiar
 DECAIMENTO_COLETA = 0.8    # quanto o limiar encolhe a cada afrouxada
 DISPERSAO_ALVO = 0.35      # raio de nuvem considerado saudável, para a UI
+
+
+# =============================================================================
+# Sinais — python -m libras.app --sinais (fase 2)
+#
+# Nada abaixo desta linha afeta o alfabeto. Ver a spec em
+# docs/superpowers/specs/2026-08-11-sinais-dicionario-design.md
+# =============================================================================
+
+DIR_SINAIS = DIR_DADOS / "sinais"
+DICIONARIO_SINAIS = DIR_SINAIS / "dicionario.npz"
+PROTOTIPOS_USUARIO = DIR_SINAIS / "meus_prototipos.npz"
+RELATORIO_SINAIS = RAIZ / "models" / "relatorio_sinais.txt"
+
+# --- Segmentação (libras/sinais/segmenter.py) ---
+# Velocidade em larguras de ombro por segundo — mesma invariante da
+# normalização, então chegar perto da câmera não dispara sinal sozinho.
+LIMIAR_MOVIMENTO = 0.35
+FRAMES_PARA_INICIAR = 3      # tranco isolado não é consulta
+SEGUNDOS_REPOUSO = 0.5       # mão parada por este tempo fecha o sinal
+SEGUNDOS_MINIMO_SINAL = 0.4  # abaixo disso foi ruído; descarta em silêncio
+SEGUNDOS_MAXIMO_SINAL = 4.0  # corta em vez de gravar para sempre
+
+# --- Busca ---
+CANDIDATOS_NA_TELA = 5   # é um dicionário, não um tradutor: cinco é resposta boa
+BANDA_DTW = 0.2          # desvio máximo da diagonal no alinhamento temporal
+SEGUNDOS_MOSTRANDO = 4.0  # quanto tempo o resultado fica na tela

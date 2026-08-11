@@ -2,6 +2,11 @@
 
     python -m libras.app              # soletrar: sua mão vira texto
     python -m libras.app --praticar   # praticar: ele pede a letra, você faz
+    python -m libras.app --sinais     # dicionário: você sinaliza, ele traduz
+
+Os dois primeiros são o alfabeto e moram aqui. `--sinais` é outro problema —
+trajetória, duas mãos, localização no corpo — e mora em `app_sinais.py`, com o
+seu próprio loop. Misturar os dois deixaria os dois piores.
 """
 
 from __future__ import annotations
@@ -213,10 +218,22 @@ def main(argv: list[str] | None = None) -> int:
         default=config.RODADAS_PRATICA,
         help=f"quantas letras por sessão de prática (padrão: {config.RODADAS_PRATICA})",
     )
+    analisador.add_argument(
+        "--sinais",
+        action="store_true",
+        help="dicionário reverso de sinais: você sinaliza, ele mostra 5 candidatos",
+    )
     argumentos = analisador.parse_args(argv)
 
     if argumentos.rodadas < 1:
         analisador.error("--rodadas deve ser >= 1")
+    if argumentos.sinais and argumentos.praticar:
+        analisador.error("--sinais e --praticar são modos diferentes; escolha um")
+
+    if argumentos.sinais:
+        from .app_sinais import executar as executar_sinais
+
+        return executar_sinais()
 
     return executar(praticando=argumentos.praticar, rodadas=argumentos.rodadas)
 

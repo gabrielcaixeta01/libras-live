@@ -6,8 +6,9 @@ __pycache__/
 # Landmarks extraídos e datasets baixados — regeráveis, pesados
 data/
 
-# Modelo do MediaPipe (7.8MB, baixado por scripts/download_model.sh)
+# Modelos do MediaPipe (~17MB, baixados por scripts/download_model.sh)
 models/hand_landmarker.task
+models/pose_landmarker.task
 
 # Classificador treinado — regerado por training/train.py, muda a cada treino
 models/classifier.joblib

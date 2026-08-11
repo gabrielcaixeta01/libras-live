@@ -1,16 +1,21 @@
 # libras-live
 
-Reconhecimento do **alfabeto de Libras** em tempo real pela webcam. Você
-sinaliza, ele vai formando o texto na tela — contínuo, sem apertar botão a cada
-letra.
+Reconhecimento de **Libras** em tempo real pela webcam, em duas frentes:
 
-Feito como ferramenta de treino de datilologia. Roda a 30fps em CPU (33ms por
-frame, medido num Apple M5 — o contador na tela mostra o seu), o classificador
-tem menos de 1MB, e nenhuma imagem sai da sua máquina.
+- **Alfabeto** — você soletra, ele vai formando o texto na tela, contínuo, sem
+  apertar botão a cada letra.
+- **Dicionário reverso de sinais** — você faz um sinal, ele mostra as cinco
+  palavras mais prováveis. É a busca que um dicionário de Libras não oferece:
+  procurar pela *forma* quando você não sabe o nome.
+
+Roda a 30fps em CPU (33ms por frame, medido num Apple M5 — o contador na tela
+mostra o seu), o classificador do alfabeto tem menos de 1MB, e nenhuma imagem
+sai da sua máquina.
 
 ```
 python -m libras.app              # soletrar: sua mão vira texto
 python -m libras.app --praticar   # praticar: ele pede a letra, você faz
+python -m libras.app --sinais      # dicionário: você sinaliza, ele traduz
 ```
 
 ---
@@ -24,6 +29,7 @@ python -m libras.app --praticar   # praticar: ele pede a letra, você faz
 - [Os dados](#os-dados)
 - [O treinamento](#o-treinamento)
 - [Estado atual](#estado-atual)
+- [Sinais: o dicionário reverso](#sinais-o-dicionário-reverso)
 - [Estrutura do projeto](#estrutura-do-projeto)
 - [Ajustes](#ajustes)
 - [Testes](#testes)
@@ -39,9 +45,14 @@ python -m libras.app --praticar   # praticar: ele pede a letra, você faz
 Reconhece as **26 letras do alfabeto de Libras** (Língua Brasileira de Sinais —
 não ASL) a partir da pose da mão, e monta palavras conforme você soletra.
 
-Não traduz Libras como língua: frases, gramática espacial, expressão facial e
-sinais compostos estão fora do escopo. Isso é problema de pesquisa em aberto, não
-uma limitação a ser corrigida numa próxima versão.
+Reconhece **sinais isolados** (palavras) por busca num dicionário de protótipos:
+você sinaliza, ele devolve cinco candidatos ordenados. Vocabulário fechado, uma
+palavra por consulta.
+
+Não traduz Libras como língua: **frases**, gramática espacial, concordância
+verbal e expressão facial como traço distintivo estão fora do escopo. É aí que
+mora o problema de pesquisa em aberto — reconhecimento de sinal isolado com
+vocabulário fechado, que é o que a segunda frente faz, não é.
 
 Letras com movimento (H, J, K, X, Z) são reconhecidas pela pose característica,
 não pela trajetória. Funciona para treinar, mas é uma simplificação — veja
@@ -210,6 +221,28 @@ e confere se você acertou, cronometrando. É a diferença entre ler e escrever,
 Errar não passa a rodada — de propósito. Pular no erro deixaria você treinar só
 o que já sabe, e o placar mediria sorte. `P` pula a letra atual, `R` reinicia a
 sessão.
+
+### 6. Sinais (opcional, e independente dos passos acima)
+
+O dicionário de sinais tem a sua própria base e o seu próprio pipeline — não
+precisa do classificador do alfabeto, nem ele do dicionário.
+
+```bash
+# 1. baixe o V-LIBRASIL em https://libras.cin.ufpe.br (~10,5 GB) e extraia
+#    mantendo uma pasta por articulador:
+#      data/raw/v-librasil/articulador_1/casa.mp4
+#      data/raw/v-librasil/articulador_2/casa.mp4
+
+python training/prepare_sinais.py --videos data/raw/v-librasil   # 2-5h de CPU
+python training/eval_sinais.py                                   # o placar honesto
+python -m libras.app --sinais                                    # usar
+```
+
+`--limite 50` processa só os primeiros vídeos, para testar o caminho antes de
+gastar horas. A extração é retomável: interromper e rodar de novo continua de
+onde parou.
+
+Detalhes em [Sinais: o dicionário reverso](#sinais-o-dicionário-reverso).
 
 ---
 
@@ -416,11 +449,160 @@ Duas famílias distintas:
 
 ---
 
+## Sinais: o dicionário reverso
+
+```bash
+python -m libras.app --sinais
+```
+
+Um dicionário de Libras é indexado por português. Se você vê um sinal que não
+conhece, não tem como procurar — você não sabe o nome dele, que é exatamente o
+que está tentando descobrir. Este modo inverte o índice: **a chave passa a ser a
+forma**.
+
+É também o que torna o top-5 honesto em vez de uma desculpa. Num tradutor, cinco
+respostas é uma resposta errada. Num dicionário, cinco candidatos é uma resposta
+boa — você reconhece a certa quando a vê.
+
+### A inversão que faz isso funcionar
+
+O alfabeto normaliza pondo **o pulso na origem**, o que apaga onde a mão está.
+Para uma letra isso é o certo: a letra é só a forma da mão.
+
+Para um sinal é errado. Em Libras a **localização é fonema** — PAI e MÃE têm a
+mesma configuração de mão em lugares diferentes do rosto. Uma normalização que
+apaga a localização apaga a diferença entre as duas palavras.
+
+| | alfabeto | sinal |
+|---|---|---|
+| origem | pulso | ponto médio dos ombros |
+| escala | maior distância ao pulso | distância entre os ombros |
+| preserva | forma da mão | forma **+ localização + trajetória** |
+| unidade | 1 frame | janela de 32 frames |
+| mãos | 1 | 2 |
+| pontos | 21 | 49 (2 mãos + 7 do corpo) |
+
+`landmarks.normalizar` não foi tocado. O app do alfabeto continua idêntico; o
+novo é um pacote irmão em [`libras/sinais/`](libras/sinais/).
+
+### O pipeline
+
+```
+webcam → 49 landmarks → segmentar por repouso → imputar buracos
+       → normalizar no corpo → reamostrar p/ 32 frames → buscar → top-5
+```
+
+**Segmentação automática** — [`sinais/segmenter.py`](libras/sinais/segmenter.py).
+A mão sai do descanso, o sinal começa; a mão para, ele acaba e vai para a busca.
+Mesmo espírito do "espaço por ausência" do alfabeto: sem tocar no teclado. A
+velocidade é medida em **larguras de ombro por segundo**, não em pixels — senão
+chegar perto da câmera dispararia sinais sozinho.
+
+**Imputação por spline** — [`sinais/sequencia.py`](libras/sinais/sequencia.py).
+O MediaPipe perde a mão quando ela cruza o corpo ou fecha. Num frame isolado
+isso é fatal; numa sequência não, porque os vizinhos no tempo sabem onde ela
+estava. Nunca por extrapolação: nas bordas o valor é travado, porque spline
+cúbica extrapolada dispara e uma mão inventada longe do corpo estraga toda
+distância que ela tocar. Uma **máscara de validade** acompanha a sequência
+dizendo o que foi medido e o que foi inventado.
+
+**49 pontos, não 543.** O MediaPipe entrega 468 de rosto + 33 de pose + 21 por
+mão. Usar tudo piora: sobre três amostras por sinal, cada coordenada a mais é
+uma chance a mais de decorar ruído. O subconjunto segue
+[arXiv:2510.24887](https://arxiv.org/abs/2510.24887) (IEEE SAS 2026), que bate o
+SOTA em Libras isolada com 5x menos tempo justamente por selecionar landmarks.
+
+### Os dados, e a restrição que eles impõem
+
+[V-LIBRASIL](https://libras.cin.ufpe.br) (UFPE/CIn): **1.364 sinais, 4.089
+vídeos, ~10,5 GB**. O número que decide o desenho inteiro:
+
+```
+4.089 vídeos ÷ 1.364 sinais = 3 gravações por sinal — uma por articulador
+```
+
+Três exemplos por classe não é "dataset pequeno", é **few-shot por definição**.
+Um classificador de 1.364 saídas decoraria os articuladores. Daí a arquitetura
+ser **representação + busca vetorial**, não classificação.
+
+```bash
+python training/prepare_sinais.py --videos data/raw/v-librasil   # 2-5h de CPU
+python training/eval_sinais.py                                   # o placar honesto
+```
+
+A extração é retomável e nenhum frame é gravado — cada vídeo vira 32×147 números
+e a imagem é descartada, como na fase 1.
+
+### A baseline vem antes do encoder
+
+A métrica de busca é **DTW** — alinhamento temporal, numpy puro, zero dependência
+nova. O mesmo sinal feito devagar e feito rápido é a mesma palavra; uma distância
+frame a frame diria que não.
+
+O passo seguinte natural seria um encoder neural com metric learning. Mas ele
+traz **torch** para um projeto que hoje é scikit-learn puro com modelo de menos
+de 1MB — a maior mudança de dependência da história do repo. Antes de pagar essa
+conta é preciso saber quanto ela compra, e a baseline é quem produz esse número.
+**Se o encoder não bater o DTW por margem clara em leave-one-articulator-out, o
+torch não entra.** A decisão fica escrita em `models/relatorio_sinais.txt`.
+
+Para que a troca seja barata, a métrica entra por parâmetro no dicionário:
+sequência (32, 147) com DTW hoje, embedding (256,) com cosseno depois. O app não
+sabe a diferença.
+
+Custo medido da busca completa: **87 ms** para 4.092 protótipos — e é uma
+consulta por sinal, não por frame, então ela não entra no orçamento dos 33 ms do
+loop de vídeo. Sem FAISS, sem índice: é um produto de matrizes.
+
+### O protocolo de avaliação
+
+**leave-one-articulator-out**: indexa com dois articuladores, consulta com o
+terceiro, três rodízios. Com três pessoas gravando tudo, qualquer divisão
+aleatória põe o mesmo articulador dos dois lados e o placar mede memorização de
+pessoa — o mesmo erro que custou caro no L↔G.
+
+| métrica | o que responde |
+|---|---|
+| **recall@5** | **a resposta está na tela?** ← a métrica do produto |
+| recall@1 | acertou de primeira? |
+| MRR | quão alto na lista? |
+
+Referência da área para busca em vocabulário grande: 50,8% de MRR em 10.235
+sinais ([arXiv:2502.20171](https://arxiv.org/abs/2502.20171)).
+
+### Re-ancoragem: quando errar ensina
+
+Três articuladores significam que o modelo tem todo incentivo para aprender *as
+pessoas* em vez dos sinais. É o mecanismo do L↔G de novo, agora com número.
+
+A mitigação é estrutural. Quando o resultado sai errado, você aperta o **número
+do candidato certo** — e aquele sinal, feito pela sua mão, vira protótipo no
+dicionário. Da próxima vez ele acerta. Sem retreinar nada.
+
+| tecla | ação |
+|---|---|
+| `1`–`5` | o candidato certo era este — ensina com a sua mão |
+| `N` | nomear um sinal que não está no dicionário |
+| `C` | limpar o resultado |
+| `ESC` | sair |
+
+Seus protótipos ficam em `data/sinais/meus_prototipos.npz`, separados do
+dicionário base, que nunca é reescrito. É a mesma lição da fase 1 — a sua mão é
+a âncora — resolvida por arquitetura em vez de por mais uma sessão de coleta.
+
+**Estado:** o pipeline está completo e testado ponta a ponta, mas o dicionário
+ainda não foi construído — depende de baixar os 10,5 GB do V-LIBRASIL. Não há
+número de recall@5 aqui ainda, e não vai haver até `eval_sinais.py` rodar sobre
+dados de verdade.
+
+---
+
 ## Estrutura do projeto
 
 ```
 libras/
-  app.py          loop principal: liga tudo e desenha
+  app.py          loop principal do alfabeto: liga tudo e desenha
+  app_sinais.py   loop do dicionário reverso
   camera.py       captura da webcam (fino)
   landmarks.py    MediaPipe + a normalização dos 21 pontos
   classifier.py   carrega o modelo treinado, prediz e rejeita
@@ -430,18 +612,31 @@ libras/
   sampling.py     filtro de diversidade da coleta (lógica pura)
   augment.py      aumento de dados no espaço dos landmarks
   recovery.py     cascata de variantes para imagens difíceis
-  ui.py           desenho do overlay (fino)
+  ui.py           desenho do overlay do alfabeto (fino)
+  ui_sinais.py    desenho do overlay do dicionário (fino)
   config.py       todos os parâmetros ajustáveis
+
+  sinais/
+    pose.py       os 49 pontos e a normalização ancorada no corpo
+    sequencia.py  imputação por spline, reamostragem, validade
+    segmenter.py  quando um sinal começa e quando acaba
+    dtw.py        distância com alinhamento temporal, em lote
+    dicionario.py protótipos, busca top-5, re-ancoragem
+    avaliacao.py  recall@1/@5, MRR, leave-one-articulator-out
+    catalogo.py   rótulo e articulador a partir do caminho do vídeo
+    detector.py   MediaPipe 2 mãos + pose (fino)
 
 training/
   prepare_dataset.py   baixa a base pública e extrai landmarks
   collect.py           grava suas amostras pela webcam
   train.py             compara modelos, treina e salva o relatório
+  prepare_sinais.py    extrai os vídeos do V-LIBRASIL
+  eval_sinais.py       leave-one-articulator-out
 
-tests/            118 testes, sem câmera e sem modelo
-scripts/          download do modelo do MediaPipe
-models/           hand_landmarker.task, classifier.joblib, relatorio_treino.txt
-data/             dataset_publico.npz, coletados/*.npy, raw/
+tests/            260 testes, sem câmera, sem vídeo e sem modelo
+scripts/          download dos modelos do MediaPipe
+models/           hand_landmarker.task, pose_landmarker.task, classifier.joblib
+data/             dataset_publico.npz, coletados/*.npy, sinais/, raw/
 ```
 
 `data/` e os modelos não são versionados — são regeráveis e pesados.
@@ -465,6 +660,18 @@ Tudo em [`libras/config.py`](libras/config.py).
 | `AUG_ALVO_POR_CLASSE` | 600 | amostras por letra depois de equilibrar |
 | `ESPELHAR_VIDEO` | `True` | efeito espelho na imagem |
 
+Do modo sinais:
+
+| parâmetro | padrão | efeito |
+|---|---|---|
+| `LIMIAR_MOVIMENTO` | 0,35 | larguras de ombro/s para o sinal começar |
+| `FRAMES_PARA_INICIAR` | 3 | frames em movimento antes de gravar |
+| `SEGUNDOS_REPOUSO` | 0,5 | mão parada por este tempo fecha o sinal |
+| `SEGUNDOS_MINIMO_SINAL` | 0,4 | abaixo disso foi ruído, descarta |
+| `SEGUNDOS_MAXIMO_SINAL` | 4,0 | corta em vez de gravar para sempre |
+| `CANDIDATOS_NA_TELA` | 5 | quantas palavras a busca devolve |
+| `BANDA_DTW` | 0,2 | desvio máximo da diagonal no alinhamento |
+
 ---
 
 ## Testes
@@ -473,16 +680,21 @@ Tudo em [`libras/config.py`](libras/config.py).
 python -m pytest tests/ -q
 ```
 
-118 testes, ~0,5s, sem câmera e sem modelo treinado. Cobrem normalização,
-estabilização, soletração, aumento de dados, recuperação de imagens, rejeição,
-diversidade da coleta e modo prática — toda a lógica que pode dar errado.
+260 testes, menos de 1s, sem câmera, sem vídeo, sem dataset e sem modelo
+treinado. Cobrem normalização (das duas), estabilização, soletração, aumento de
+dados, recuperação de imagens, rejeição, diversidade da coleta, modo prática,
+imputação temporal, segmentação de sinais, DTW, busca no dicionário,
+re-ancoragem e as métricas de avaliação — toda a lógica que pode dar errado.
 
 O que não está testado é o que não dá para testar sem hardware: a captura da
-webcam e o desenho na tela. Ambos foram mantidos finos justamente por isso.
+webcam, o desenho na tela e os dois wrappers do MediaPipe. Todos foram mantidos
+finos justamente por isso.
 
 ---
 
 ## Limitações conhecidas
+
+### No alfabeto
 
 **Letras com movimento são tratadas como pose.** H, J, K, X e Z têm trajetória
 em Libras, mas aqui são classificadas por um frame só. A medida que expõe isso:
@@ -495,7 +707,22 @@ N antes da cascata de recuperação.
 
 **A métrica não descreve o uso real.** Treino e teste saem das mesmas sessões.
 
-**Uma mão só.** `num_hands=1` — sinais que usam as duas mãos estão fora.
+### Nos sinais
+
+**Três articuladores.** O V-LIBRASIL tem uma gravação por pessoa por sinal, e o
+modelo tem todo incentivo para aprender as pessoas. O leave-one-articulator-out
+mede isso e a re-ancoragem corrige no uso — mas a base é essa.
+
+**Nenhum número medido ainda.** O pipeline está pronto e testado; o dicionário
+depende de baixar os 10,5 GB e rodar a extração. Até lá não há recall@5 aqui, e
+inventar um seria pior que não ter.
+
+**Sem expressão facial.** É fonema em Libras, e sinais que só diferem por ela
+vão colidir. 468 pontos de rosto sobre três amostras por classe seria ruído
+garantido — fica para quando houver mais dado.
+
+**Um sinal por vez.** Consulta isolada com repouso antes e depois; não há
+segmentação de frases contínuas.
 
 ---
 
@@ -503,33 +730,47 @@ N antes da cascata de recuperação.
 
 Em ordem de valor:
 
-1. **Conjunto de avaliação separado.** Uma sessão de gravação em outro dia,
-   outra luz, outra roupa, usada só como teste e nunca no treino. É o que
-   transforma "achei que melhorou" em evidência, e é pré-requisito para medir
-   qualquer coisa abaixo.
-2. **Features geométricas** — ângulos entre dedos e distâncias ponta-a-ponta
-   somados às coordenadas cruas, mirando U/V e B/W especificamente.
-3. **Modelo temporal** para as letras de movimento: classificar uma janela de
-   frames em vez de um frame. É a mudança de arquitetura que o raio do J pede.
-4. **Autocorreção com dicionário PT-BR** — um erro em dez letras arruína a
-   palavra inteira; a palavra em andamento já aparece destacada e poderia ser
-   corrigida.
+1. **Construir e medir o dicionário de sinais.** Baixar o V-LIBRASIL, rodar
+   `prepare_sinais.py` e `eval_sinais.py`. Tudo abaixo depende deste número.
+2. **Conjunto de avaliação separado do alfabeto.** Uma sessão de gravação em
+   outro dia, outra luz, outra roupa, usada só como teste. É o que transforma
+   "achei que melhorou" em evidência.
+3. **Encoder neural para os sinais**, se o recall@5 do DTW não sustentar o
+   produto — GRU ou Transformer pequeno com ArcFace, avaliado contra a mesma
+   baseline. É a decisão que `relatorio_sinais.txt` vai registrar.
+4. **Features geométricas no alfabeto** — ângulos entre dedos e distâncias
+   ponta-a-ponta somados às coordenadas cruas, mirando U/V e B/W.
+5. **Autocorreção com dicionário PT-BR** — um erro em dez letras arruína a
+   palavra inteira; a palavra em andamento já aparece destacada.
 
 ---
 
 ## Documentação
 
-[Design da fase 1](docs/superpowers/specs/2026-08-11-libras-live-design.md) — as
-decisões de arquitetura, as alternativas rejeitadas e o porquê de cada uma.
+- [Design da fase 1 — alfabeto](docs/superpowers/specs/2026-08-11-libras-live-design.md)
+  — as decisões de arquitetura, as alternativas rejeitadas e o porquê de cada uma.
+- [Design da fase 2 — dicionário reverso de sinais](docs/superpowers/specs/2026-08-11-sinais-dicionario-design.md)
+  — a restrição de três gravações por sinal e o que ela obriga.
 
 ---
 
 ## Créditos
 
 - [Brazilian Sign Language Alphabet Dataset](https://github.com/biankatpas/Brazilian-Sign-Language-Alphabet-Dataset)
-  — base pública de imagens de Libras.
+  — base pública de imagens do alfabeto.
+- [V-LIBRASIL](https://libras.cin.ufpe.br) (UFPE/CIn) — 1.364 sinais de Libras
+  em vídeo.
 - [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
-  — detecção dos 21 pontos da mão.
+  e [Pose Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/pose_landmarker)
+  — detecção dos pontos da mão e do corpo.
 
-Dependências: `mediapipe`, `opencv-python`, `scikit-learn`, `numpy`, `joblib`,
-`pytest`. Versões exatas em [`requirements.txt`](requirements.txt).
+Trabalhos que embasaram decisões da fase 2:
+
+- [Proper Body Landmark Subset Enables More Accurate and 5X Faster Recognition
+  of Isolated Signs in LIBRAS](https://arxiv.org/abs/2510.24887) (IEEE SAS 2026)
+  — o subconjunto de landmarks e a imputação por spline.
+- [Representing Signs as Signs: One-Shot ISLR](https://arxiv.org/abs/2502.20171)
+  — busca vetorial em vocabulário grande, e a referência de 50,8% de MRR.
+
+Dependências: `mediapipe`, `opencv-python`, `scikit-learn`, `scipy`, `numpy`,
+`joblib`, `pytest`. Versões exatas em [`requirements.txt`](requirements.txt).
