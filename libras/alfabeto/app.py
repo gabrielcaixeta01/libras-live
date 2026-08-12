@@ -98,103 +98,112 @@ def executar(praticando: bool = False, rodadas: int = config.RODADAS_PRATICA) ->
     erro_recente: str | None = None
     instante_erro = 0.0
 
-    with camera, DetectorMaos() as detector:
-        while True:
-            leitura = camera.ler()
-            if leitura is None:
-                print("Falha ao ler o frame da camera.", file=sys.stderr)
-                return 1
+    codigo = 0
 
-            frame_bgr, frame_rgb = leitura
+    # O texto soletrado e o resumo da prática só existem em memória até o fim do
+    # laço. Sem o `finally`, um Ctrl-C — a forma mais natural de fechar um app de
+    # terminal — descartaria a palavra inteira sem copiar nada.
+    try:
+        with camera, DetectorMaos() as detector:
+            while True:
+                leitura = camera.ler()
+                if leitura is None:
+                    print("Falha ao ler o frame da camera.", file=sys.stderr)
+                    codigo = 1
+                    break
 
-            agora = time.perf_counter()
-            delta = agora - instante_anterior
-            instante_anterior = agora
-            if delta > 0:
-                fps = 0.9 * fps + 0.1 * (1.0 / delta)
+                frame_bgr, frame_rgb = leitura
 
-            # detect_for_video exige timestamps crescentes em milissegundos.
-            timestamp_ms = int((agora - inicio) * 1000)
-            deteccao = detector.detectar(frame_rgb, timestamp_ms)
+                agora = time.perf_counter()
+                delta = agora - instante_anterior
+                instante_anterior = agora
+                if delta > 0:
+                    fps = 0.9 * fps + 0.1 * (1.0 / delta)
 
-            predicao = None
-            mao_esquerda = None
+                # detect_for_video exige timestamps crescentes em milissegundos.
+                timestamp_ms = int((agora - inicio) * 1000)
+                deteccao = detector.detectar(frame_rgb, timestamp_ms)
 
-            if deteccao is None:
-                if sessao is None:
-                    soletrador.registrar_ausencia(delta)
-            else:
-                predicao = classificador.prever(deteccao.vetor)
-                mao_esquerda = deteccao.mao_esquerda
-                if sessao is None:
-                    soletrador.registrar_presenca()
-                ui.desenhar_mao(frame_bgr, deteccao.pontos)
+                predicao = None
+                mao_esquerda = None
 
-            # Uma predição rejeitada não alimenta o estabilizador: entra como
-            # "sem letra", igual a um frame sem mão. Assim o "?" nunca vira texto.
-            letra = predicao.letra if predicao and predicao.aceita else None
-            confianca = predicao.confianca if predicao else 0.0
-            confirmada = estabilizador.atualizar(letra, confianca)
-
-            if confirmada and sessao is not None:
-                if sessao.registrar(confirmada, agora - inicio_rodada):
-                    inicio_rodada = agora
-                    erro_recente = None
+                if deteccao is None:
+                    if sessao is None:
+                        soletrador.registrar_ausencia(delta)
                 else:
-                    erro_recente, instante_erro = confirmada, agora
-            elif confirmada:
-                soletrador.adicionar(confirmada)
+                    predicao = classificador.prever(deteccao.vetor)
+                    mao_esquerda = deteccao.mao_esquerda
+                    if sessao is None:
+                        soletrador.registrar_presenca()
+                    ui.desenhar_mao(frame_bgr, deteccao.pontos)
 
-            if erro_recente and agora - instante_erro > SEGUNDOS_MOSTRANDO_ERRO:
-                erro_recente = None
+                # Uma predição rejeitada não alimenta o estabilizador: entra como
+                # "sem letra", igual a um frame sem mão. Assim o "?" nunca vira texto.
+                letra = predicao.letra if predicao and predicao.aceita else None
+                confianca = predicao.confianca if predicao else 0.0
+                confirmada = estabilizador.atualizar(letra, confianca)
 
-            ui.desenhar_predicao(
-                frame_bgr,
-                predicao,
-                confirmada is not None,
-                estabilizador.preenchimento,
-                mao_esquerda,
-            )
-            ui.desenhar_alfabeto(
-                frame_bgr, classificador.letras, classificador.letras_ausentes
-            )
+                if confirmada and sessao is not None:
+                    if sessao.registrar(confirmada, agora - inicio_rodada):
+                        inicio_rodada = agora
+                        erro_recente = None
+                    else:
+                        erro_recente, instante_erro = confirmada, agora
+                elif confirmada:
+                    soletrador.adicionar(confirmada)
 
-            if sessao is not None:
-                ui.desenhar_pratica(frame_bgr, sessao, erro_recente, AJUDA_PRATICAR)
-            else:
-                ui.desenhar_texto(frame_bgr, soletrador.texto, AJUDA_SOLETRAR)
-
-            ui.desenhar_fps(frame_bgr, fps)
-
-            cv2.imshow("libras-live", frame_bgr)
-
-            tecla = cv2.waitKey(1) & 0xFF
-            if tecla == ESC:
-                break
-
-            if sessao is not None:
-                if tecla in TECLA_PULAR:
-                    sessao.pular(agora - inicio_rodada)
-                    inicio_rodada = agora
+                if erro_recente and agora - instante_erro > SEGUNDOS_MOSTRANDO_ERRO:
                     erro_recente = None
-                elif tecla == TECLA_REINICIAR:
-                    sessao.reiniciar()
-                    inicio_rodada = agora
-                    erro_recente = None
+
+                ui.desenhar_predicao(
+                    frame_bgr,
+                    predicao,
+                    confirmada is not None,
+                    estabilizador.preenchimento,
+                    mao_esquerda,
+                )
+                ui.desenhar_alfabeto(
+                    frame_bgr, classificador.letras, classificador.letras_ausentes
+                )
+
+                if sessao is not None:
+                    ui.desenhar_pratica(frame_bgr, sessao, erro_recente, AJUDA_PRATICAR)
+                else:
+                    ui.desenhar_texto(frame_bgr, soletrador.texto, AJUDA_SOLETRAR)
+
+                ui.desenhar_fps(frame_bgr, fps)
+
+                cv2.imshow("libras-live", frame_bgr)
+
+                tecla = cv2.waitKey(1) & 0xFF
+                if tecla == ESC:
+                    break
+
+                if sessao is not None:
+                    if tecla in TECLA_PULAR:
+                        sessao.pular(agora - inicio_rodada)
+                        inicio_rodada = agora
+                        erro_recente = None
+                    elif tecla == TECLA_REINICIAR:
+                        sessao.reiniciar()
+                        inicio_rodada = agora
+                        erro_recente = None
+                        estabilizador.reiniciar()
+                elif tecla in BACKSPACE:
+                    soletrador.apagar()
+                elif tecla == TECLA_LIMPAR:
+                    soletrador.limpar()
                     estabilizador.reiniciar()
-            elif tecla in BACKSPACE:
-                soletrador.apagar()
-            elif tecla == TECLA_LIMPAR:
-                soletrador.limpar()
-                estabilizador.reiniciar()
+    except KeyboardInterrupt:
+        print()  # o ^C fica na linha do terminal; o resultado merece a sua
+    finally:
+        cv2.destroyAllWindows()
 
-    cv2.destroyAllWindows()
+        if sessao is not None:
+            print(f"\nPratica: {sessao.resumo()}")
+        elif soletrador.texto:
+            print(f"\nTexto final: {soletrador.texto}")
+            if _copiar(soletrador.texto):
+                print("(copiado para a area de transferencia)")
 
-    if sessao is not None:
-        print(f"\nPratica: {sessao.resumo()}")
-    else:
-        print(f"\nTexto final: {soletrador.texto}")
-        if _copiar(soletrador.texto):
-            print("(copiado para a area de transferencia)")
-
-    return 0
+    return codigo

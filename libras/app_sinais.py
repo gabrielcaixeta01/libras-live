@@ -97,92 +97,102 @@ def executar() -> int:
     instante_resultado = 0.0
     aprendidos = 0
 
-    with camera, DetectorSinais() as detector:
-        while True:
-            leitura = camera.ler()
-            if leitura is None:
-                print("Falha ao ler o frame da camera.", file=sys.stderr)
-                return 1
+    codigo = 0
 
-            frame_bgr, frame_rgb = leitura
+    # O `finally` não é zelo: o que a pessoa ensinou nesta sessão só existe em
+    # memória até `salvar_prototipos`. Sem ele, um Ctrl-C — ou a câmera falhando
+    # no meio — jogaria fora a correção manual, que é justamente a mitigação do
+    # viés dos três articuladores.
+    try:
+        with camera, DetectorSinais() as detector:
+            while True:
+                leitura = camera.ler()
+                if leitura is None:
+                    print("Falha ao ler o frame da camera.", file=sys.stderr)
+                    codigo = 1
+                    break
 
-            agora = time.perf_counter()
-            delta = agora - instante_anterior
-            instante_anterior = agora
-            if delta > 0:
-                fps = 0.9 * fps + 0.1 * (1.0 / delta)
+                frame_bgr, frame_rgb = leitura
 
-            deteccao = detector.detectar(
-                frame_rgb,
-                timestamp_ms=int((agora - inicio) * 1000),
-                video_espelhado=config.ESPELHAR_VIDEO,
-            )
+                agora = time.perf_counter()
+                delta = agora - instante_anterior
+                instante_anterior = agora
+                if delta > 0:
+                    fps = 0.9 * fps + 0.1 * (1.0 / delta)
 
-            gravacao = segmentador.oferecer(deteccao.frame, agora - inicio)
+                deteccao = detector.detectar(
+                    frame_rgb,
+                    timestamp_ms=int((agora - inicio) * 1000),
+                    video_espelhado=config.ESPELHAR_VIDEO,
+                )
 
-            if gravacao is not None:
-                try:
-                    ultima_consulta = sequencia.preparar(gravacao)
-                    candidatos = dicionario.buscar(
-                        ultima_consulta.vetores, k=config.CANDIDATOS_NA_TELA
-                    )
-                    instante_resultado = agora
-                except ValueError:
-                    # Gravação sem âncora em frame nenhum: nada a consultar.
-                    ultima_consulta, candidatos = None, []
+                gravacao = segmentador.oferecer(deteccao.frame, agora - inicio)
 
-            if agora - instante_resultado > config.SEGUNDOS_MOSTRANDO:
-                candidatos = []
+                if gravacao is not None:
+                    try:
+                        ultima_consulta = sequencia.preparar(gravacao)
+                        candidatos = dicionario.buscar(
+                            ultima_consulta.vetores, k=config.CANDIDATOS_NA_TELA
+                        )
+                        instante_resultado = agora
+                    except ValueError:
+                        # Gravação sem âncora em frame nenhum: nada a consultar.
+                        ultima_consulta, candidatos = None, []
 
-            ui.desenhar_esqueleto(
-                frame_bgr, deteccao.maos_cruas, deteccao.corpo_cru
-            )
-            ui.desenhar_estado(
-                frame_bgr,
-                segmentador.estado,
-                segmentador.progresso,
-                segmentador.velocidade,
-            )
-
-            if candidatos:
-                ui.desenhar_candidatos(frame_bgr, candidatos, AJUDA)
-            elif not deteccao.tem_corpo:
-                ui.desenhar_aviso(frame_bgr, "corpo fora de quadro — afaste-se")
-
-            desenho.desenhar_fps(frame_bgr, fps)
-            cv2.imshow("libras-live — dicionário", frame_bgr)
-
-            tecla = cv2.waitKey(1) & 0xFF
-            if tecla == ESC:
-                break
-
-            if tecla == TECLA_LIMPAR:
-                candidatos = []
-                segmentador.reiniciar()
-            elif tecla in TECLAS_CANDIDATO and candidatos and ultima_consulta:
-                escolhido = tecla - ord("1")
-                if escolhido < len(candidatos):
-                    rotulo = candidatos[escolhido].rotulo
-                    dicionario.ancorar(ultima_consulta.vetores, rotulo)
-                    aprendidos += 1
-                    print(f"aprendido: {rotulo} (com a sua mão)")
-                    candidatos = []
-            elif tecla == TECLA_NOVO and ultima_consulta:
-                rotulo = _perguntar_rotulo()
-                if rotulo:
-                    dicionario.ancorar(ultima_consulta.vetores, rotulo)
-                    aprendidos += 1
-                    print(f"aprendido: {rotulo} (sinal novo)")
+                if agora - instante_resultado > config.SEGUNDOS_MOSTRANDO:
                     candidatos = []
 
-    cv2.destroyAllWindows()
+                ui.desenhar_esqueleto(
+                    frame_bgr, deteccao.maos_cruas, deteccao.corpo_cru
+                )
+                ui.desenhar_estado(
+                    frame_bgr,
+                    segmentador.estado,
+                    segmentador.progresso,
+                    segmentador.velocidade,
+                )
 
-    if aprendidos:
-        total = salvar_prototipos(dicionario)
-        print(f"\n{aprendidos} sinais ensinados nesta sessão "
-              f"({total} protótipos seus em {config.PROTOTIPOS_USUARIO})")
+                if candidatos:
+                    ui.desenhar_candidatos(frame_bgr, candidatos, AJUDA)
+                elif not deteccao.tem_corpo:
+                    ui.desenhar_aviso(frame_bgr, "corpo fora de quadro — afaste-se")
 
-    return 0
+                desenho.desenhar_fps(frame_bgr, fps)
+                cv2.imshow("libras-live — dicionário", frame_bgr)
+
+                tecla = cv2.waitKey(1) & 0xFF
+                if tecla == ESC:
+                    break
+
+                if tecla == TECLA_LIMPAR:
+                    candidatos = []
+                    segmentador.reiniciar()
+                elif tecla in TECLAS_CANDIDATO and candidatos and ultima_consulta:
+                    escolhido = tecla - ord("1")
+                    if escolhido < len(candidatos):
+                        rotulo = candidatos[escolhido].rotulo
+                        dicionario.ancorar(ultima_consulta.vetores, rotulo)
+                        aprendidos += 1
+                        print(f"aprendido: {rotulo} (com a sua mão)")
+                        candidatos = []
+                elif tecla == TECLA_NOVO and ultima_consulta:
+                    rotulo = _perguntar_rotulo()
+                    if rotulo:
+                        dicionario.ancorar(ultima_consulta.vetores, rotulo)
+                        aprendidos += 1
+                        print(f"aprendido: {rotulo} (sinal novo)")
+                        candidatos = []
+    except KeyboardInterrupt:
+        print()  # o ^C fica na linha do terminal; a mensagem abaixo merece a sua
+    finally:
+        cv2.destroyAllWindows()
+
+        if aprendidos:
+            total = salvar_prototipos(dicionario)
+            print(f"\n{aprendidos} sinais ensinados nesta sessão "
+                  f"({total} protótipos seus em {config.PROTOTIPOS_USUARIO})")
+
+    return codigo
 
 
 def _perguntar_rotulo() -> str:
