@@ -15,7 +15,7 @@ import time
 from collections import Counter
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from libras import avaliacao, catalogo, config  # noqa: E402
+from libras import avaliacao, catalogo, config, nucleo  # noqa: E402
 from libras.dicionario import Dicionario  # noqa: E402
 def montar_relatorio(
     dicionario: Dicionario,
@@ -96,6 +96,11 @@ def main() -> None:
     ap.add_argument("--dicionario", type=Path, default=config.DICIONARIO_SINAIS)
     ap.add_argument("--saida", type=Path, default=config.RELATORIO_SINAIS)
     ap.add_argument("--k", type=int, default=config.CANDIDATOS_NA_TELA)
+    ap.add_argument(
+        "--nucleo",
+        action="store_true",
+        help="mede só o vocabulário núcleo, que é o que o app indexa por padrão",
+    )
     args = ap.parse_args()
     if not args.dicionario.exists():
         print(
@@ -104,6 +109,17 @@ def main() -> None:
         )
         raise SystemExit(1)
     dicionario = Dicionario.carregar(args.dicionario)
+    if args.nucleo:
+        faltando = nucleo.ausentes(dicionario.vocabulario)
+        if faltando:
+            print(
+                f"{len(faltando)} sinais do núcleo não existem neste dicionário: "
+                f"{', '.join(faltando)}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        dicionario = dicionario.restringir(nucleo.CHAVES)
+
     print(f"{len(dicionario)} protótipos, {len(dicionario.vocabulario)} sinais")
     print(f"rodízio por articulador: {', '.join(dicionario.fontes)}\n")
     inicio = time.time()

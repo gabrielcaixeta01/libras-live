@@ -75,6 +75,49 @@ def test_carregar_junta_a_base_com_os_seus(caminhos):
     assert FONTE_USUARIO in carregado.fontes
 
 
+def dicionario_com_sinal_de_fora() -> Dicionario:
+    """CASA está no núcleo curado; ABACAXI não."""
+    return Dicionario(
+        representacoes=np.stack([prototipo(0.1), prototipo(0.2)]),
+        rotulos=["CASA", "ABACAXI"],
+        fontes=["articulador_1", "articulador_2"],
+        metrica="dtw",
+    )
+
+
+def test_por_padrao_o_app_indexa_so_o_nucleo(caminhos):
+    """1.364 sinais dão 7,5% de recall@5; 163 dão 37,3%. O recorte é o produto."""
+    base, _ = caminhos
+    dicionario_com_sinal_de_fora().salvar(base)
+
+    assert app_sinais.carregar_dicionario().vocabulario == ["CASA"]
+
+
+def test_tudo_devolve_o_vocabulario_inteiro(caminhos):
+    base, _ = caminhos
+    dicionario_com_sinal_de_fora().salvar(base)
+
+    carregado = app_sinais.carregar_dicionario(apenas_nucleo=False)
+
+    assert carregado.vocabulario == ["ABACAXI", "CASA"]
+
+
+def test_o_que_voce_ensinou_entra_mesmo_fora_do_nucleo(caminhos):
+    """O recorte é do V-LIBRASIL, não seu. Ensinar um sinal de fora é o caso em
+    que ele não pode atrapalhar — é para isso que a tecla N existe."""
+    base, _ = caminhos
+    dicionario_com_sinal_de_fora().salvar(base)
+
+    meu = dicionario_base()
+    meu.ancorar(prototipo(0.9), "ABACAXI")
+    app_sinais.salvar_prototipos(meu)
+
+    carregado = app_sinais.carregar_dicionario()
+
+    assert carregado.vocabulario == ["ABACAXI", "CASA"]
+    assert carregado.rotulos.count("ABACAXI") == 1  # o seu, não o do dataset
+
+
 def test_carregar_sem_dicionario_diz_o_que_fazer(caminhos):
     """A mensagem é a única pista de quem chegou aqui sem rodar a extração."""
     with pytest.raises(FileNotFoundError, match="prepare_sinais"):

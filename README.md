@@ -5,8 +5,9 @@ Reconhecimento de **Libras** em tempo real pela webcam, em duas frentes:
 - **Alfabeto** — você soletra, ele vai formando o texto na tela, contínuo, sem
   apertar botão a cada letra.
 - **Dicionário reverso de sinais** — você faz um sinal, ele mostra as cinco
-  palavras mais prováveis. É a busca que um dicionário de Libras não oferece:
-  procurar pela *forma* quando você não sabe o nome.
+  palavras mais prováveis, dentro de um vocabulário núcleo de 163 sinais do dia
+  a dia. É a busca que um dicionário de Libras não oferece: procurar pela
+  *forma* quando você não sabe o nome.
 
 Roda a 30fps em CPU (33ms por frame, medido num Apple M5 — o contador na tela
 mostra o seu), o classificador do alfabeto tem menos de 1MB, e nenhuma imagem
@@ -48,6 +49,13 @@ não ASL) a partir da pose da mão, e monta palavras conforme você soletra.
 Reconhece **sinais isolados** (palavras) por busca num dicionário de protótipos:
 você sinaliza, ele devolve cinco candidatos ordenados. Vocabulário fechado, uma
 palavra por consulta.
+
+O vocabulário é **curado e pequeno de propósito**: 163 sinais do cotidiano
+(saudações, cortesia, família, necessidades, tempo, perguntas), não as 1.364
+palavras do V-LIBRASIL. A razão está medida em
+[Sinais: o dicionário reverso](#sinais-o-dicionário-reverso) — com 1.364
+candidatos a resposta certa aparece em 10,3% das consultas, e com 163 em 37,3%.
+`--tudo` devolve o vocabulário inteiro para quem preferir cobertura a acerto.
 
 Não traduz Libras como língua: **frases**, gramática espacial, concordância
 verbal e expressão facial como traço distintivo estão fora do escopo. É aí que
@@ -132,7 +140,7 @@ por mais longa que ela seja.
 
 `landmarks.normalizar`, `stabilizer`, `speller`, `sampling` e `practice` são
 **lógica pura**: numpy entra, numpy sai, nenhum relógio e nenhuma câmera lá
-dentro. O tempo entra sempre por parâmetro. É por isso que 347 testes rodam em
+dentro. O tempo entra sempre por parâmetro. É por isso que 380 testes rodam em
 segundos sem webcam e sem modelo treinado — e é por isso que a parte que pode dar
 errado é a parte que está testada.
 
@@ -232,8 +240,8 @@ precisa do classificador do alfabeto, nem ele do dicionário.
 ```bash
 bash scripts/download_vlibrasil.sh                # ~10,8 GB, baixa e extrai
 python training/prepare_sinais.py --videos data/raw/v-librasil
-python training/eval_sinais.py                    # o placar da baseline DTW
-python training/train_sinais.py                   # o encoder neural (~15 min)
+python training/eval_sinais.py --nucleo           # a baseline DTW do núcleo
+python training/train_sinais.py --treino-nucleo --aberto 0   # o encoder (~1,3 min)
 python -m libras.app --sinais                     # usar
 ```
 
@@ -253,6 +261,13 @@ O `train_sinais.py` **não reprocessa vídeo nenhum** — ele trabalha sobre os
 protótipos já extraídos. Quando ele termina, o app passa a usar o encoder sozinho;
 sem ele, continua na baseline DTW. `--limite-sinais 30 --epocas 3` ensaia o
 caminho inteiro em segundos.
+
+O `--treino-nucleo` treina e mede no [vocabulário
+núcleo](#o-vocabulário-núcleo-a-promessa-que-cabe-no-dado), que é o que o app
+indexa. Sem ele o treino usa as 1.363 classes, custa 9,1 min em vez de 1,3, e
+entrega um recall@5 mais baixo **no vocabulário que o app responde** — 29,8%
+contra 37,3%. O `--aberto 0` desliga a medição de vocabulário aberto, que não
+cabe em 163 classes.
 
 Detalhes em [Sinais: o dicionário reverso](#sinais-o-dicionário-reverso).
 
@@ -464,7 +479,8 @@ Duas famílias distintas:
 ## Sinais: o dicionário reverso
 
 ```bash
-python -m libras.app --sinais
+python -m libras.app --sinais          # 163 sinais do dia a dia
+python -m libras.app --sinais --tudo   # as 1.364 do V-LIBRASIL
 ```
 
 Um dicionário de Libras é indexado por português. Se você vê um sinal que não
@@ -638,12 +654,17 @@ A busca está correta; a **representação** é que separa mal entre pessoas. O
 mesmo sinal feito por dois articuladores fica só 20% mais perto que dois sinais
 quaisquer, e com 1.363 classes isso produz os 7,5% medidos.
 
-Vocabulário menor não salva — a fraqueza é uniforme em toda escala:
+A fraqueza é uniforme em toda escala — o que muda com o tamanho do vocabulário
+não é a qualidade da representação, é quantos candidatos existem para confundir:
 
 | sinais no dicionário | 25 | 100 | 500 | 1.363 |
 |---|---|---|---|---|
 | recall@5 | 56,8% | 24,0% | 11,5% | 7,5% |
 | acaso | 20% | 5% | 1% | 0,4% |
+
+Essa tabela acabou sendo a coisa mais importante medida nesta fase, e não pelo
+motivo esperado: ela é a receita do
+[vocabulário núcleo](#o-vocabulário-núcleo-a-promessa-que-cabe-no-dado).
 
 Engenharia de feature sobre DTW também não: z-normalizar as sequências leva o
 recall@5 de 16,4% para 20,2% num vocabulário de 250 — ganho real, longe de
@@ -676,8 +697,11 @@ recall@5  10,3%     recall@1  3,8%     MRR  6,1%
 **1,4x a baseline.** Ganho real, medido no mesmo protocolo, com o mesmo dado e a
 mesma busca — e abaixo do que justificaria o torch sozinho. Aprender a distância
 foi na direção certa e não foi longe o bastante: com três gravações por sinal, o
-que falta não é objetivo, é dado. O relatório completo, com o veredito, fica em
-`models/relatorio_encoder.txt`.
+que falta não é objetivo, é dado.
+
+(É no vocabulário núcleo que esse veredito vira sim: **1,7x**, e é ele que o app
+usa. Ver a seção seguinte. O relatório completo fica em
+`models/relatorio_encoder.txt`.)
 
 **Vocabulário aberto: 12,3% de recall@5** em 200 sinais que o encoder nunca viu
 no treino e que entram no índice só como protótipo. É *acima* do vocabulário
@@ -710,6 +734,94 @@ continua na baseline DTW. A re-ancoragem (`1`–`5`) funciona nos dois — os se
 protótipos vão para um arquivo por métrica, porque um embedding não cabe no npz
 das sequências.
 
+### O vocabulário núcleo: a promessa que cabe no dado
+
+10,3% de recall@5 não é um dicionário utilizável, e o diagnóstico já estava
+escrito acima: com três gravações por sinal, nenhuma arquitetura responde "qual
+destas 1.363?". O que sobrou foi mudar a pergunta. **Parar de prometer 1.364
+palavras.**
+
+[`libras/nucleo.py`](libras/nucleo.py) é uma lista curada de **163 sinais** do
+cotidiano — saudações, cortesia, pessoas e família, necessidades e saúde,
+lugares, tempo, perguntas, verbos do dia a dia, sentimentos, cores, comida,
+objetos. É o que o app indexa por padrão. Os `LETRA A`…`LETRA Z` do V-LIBRASIL
+ficam de fora: o alfabeto manual é o outro modo do projeto, e ele acerta.
+
+O recorte foi medido nos dois caminhos, no mesmo leave-one-articulator-out:
+
+| | índice | recall@5 | recall@1 | MRR |
+|---|---|---|---|---|
+| DTW | 1.363 sinais | 7,5% | 2,9% | 4,4% |
+| encoder treinado em tudo | 1.363 sinais | 10,3% | 3,8% | 6,1% |
+| DTW | núcleo | 21,4% | 8,6% | 12,9% |
+| encoder treinado em tudo | núcleo | 29,8% | 13,5% | 19,3% |
+| **encoder treinado no núcleo** | **núcleo** | **37,3%** | **16,3%** | **23,7%** |
+
+**5x a baseline original**, e o caminho até lá tem duas partes que se somam:
+recortar o índice vale 2,9x sozinho (7,5% → 21,4%, sem tocar em nada), e treinar
+o encoder no vocabulário que ele vai responder vale mais 1,7x.
+
+A última linha foi a surpresa. Treinar em 1.363 classes dá ao encoder **8x mais
+gravações** para aprender o que é trajetória de mão, e a medida de vocabulário
+aberto (12,3% acima de 10,3%) sugeria que essa representação genérica
+transferiria bem. Transfere — 29,8% é bem melhor que 10,3% —, mas perde para
+concentrar a capacidade nas 163 classes que importam, com 2 gravações de cada.
+Mais dado genérico não bateu menos dado específico.
+
+O treino do núcleo custa **1,3 min** contra 9,1 min do vocabulário inteiro, e o
+modelo do app é o mesmo arquivo de sempre:
+
+```
+python training/eval_sinais.py --nucleo          # a baseline DTW do núcleo
+python training/train_sinais.py --treino-nucleo --aberto 0
+python -m libras.app --sinais                    # usa o núcleo
+python -m libras.app --sinais --tudo             # as 1.364, se você preferir
+```
+
+O `--tudo` continua funcionando porque o índice em disco guarda os 4.086
+protótipos mesmo quando o treino vê só o núcleo. O recorte acontece ao carregar,
+e vale só para o que veio do V-LIBRASIL: **o que você ensina entra sempre**,
+esteja ou não na lista curada. Ensinar um sinal de fora é justamente o caso em
+que o recorte não pode atrapalhar.
+
+### O limiar de rejeição, e o pouco que ele compra
+
+Com 163 sinais no índice, quase tudo que você pode sinalizar está fora dele — e
+sem limiar a busca responde assim mesmo, devolvendo os cinco mais parecidos com
+cara de resposta. É a versão em sinais do problema que `CONFIANCA_REJEICAO`
+resolve no alfabeto.
+
+O corte saiu do mesmo protocolo, de graça: as gravações dos **1.200 sinais fora
+do núcleo**, feitas pelo articulador de teste, são consultas que não têm resposta
+possível. Foram 307 delas contra as 490 de dentro.
+
+| cobertura dos acertos | corte | listas com resposta | invenção cortada |
+|---|---|---|---|
+| 99,5% | 0,5098 | 38,1% | 3,6% |
+| **95,1%** | **0,4723** | **38,2%** | **8,5%** |
+| 90,2% | 0,4503 | 38,7% | 15,0% |
+| 80,3% | 0,4114 | 39,2% | 25,7% |
+
+**As duas distribuições se sobrepõem, e a tabela não esconde isso.** No corte
+escolhido o app recusa 8,5% das consultas sem resposta e paga ~1,8 ponto de
+recall@5 por isso. A distância do cosseno não é confiança, e enquanto ela for o
+único sinal disponível a rejeição fica nesse patamar — presente, honesta, e
+pequena.
+
+A escolha de 95% vem do custo assimétrico dos dois erros: num dicionário, uma
+lista errada custa um olhar (você não reconhece nenhuma das cinco e refaz o
+sinal), e um acerto recusado custa a resposta que a pessoa procurava. Maximizar
+o J de Youden ignora essa assimetria — ele escolhia 0,2878, um corte que
+guardava só 37% dos acertos.
+
+Em `--tudo` a rejeição fica **desligada**: o limiar foi calibrado com 163 sinais
+no índice, e com 1.364 o vizinho mais próximo é sempre mais próximo. O mesmo
+corte passaria a aceitar quase tudo, e um limiar frouxo é pior que nenhum — ele
+promete uma recusa que não acontece.
+
+As distâncias medidas ficam em `models/confiancas_rejeicao.npz`, para que
+escolher outro corte não custe três treinos.
+
 ---
 
 ## Estrutura do projeto
@@ -726,7 +838,8 @@ libras/
   segmenter.py     quando um sinal começa e quando acaba
   dtw.py           distância com alinhamento temporal, em lote
   encoder.py       GRU bidirecional → embedding 256d (único lugar com torch)
-  dicionario.py    protótipos, busca top-5, re-ancoragem
+  dicionario.py    protótipos, busca top-5, re-ancoragem, recorte de vocabulário
+  nucleo.py        os 163 sinais que o dicionário promete acertar
   avaliacao.py     recall@1/@5, MRR, leave-one-articulator-out
   catalogo.py      rótulo e articulador a partir do caminho do vídeo
   detector.py      MediaPipe 2 mãos + pose (fino)
@@ -757,7 +870,7 @@ training/
   eval_sinais.py       leave-one-articulator-out da baseline DTW
   train_sinais.py      treina o encoder e mede se ele paga o torch
 
-tests/            347 testes, espelhando a mesma divisão
+tests/            380 testes, espelhando a mesma divisão
 scripts/
   download_model.sh       modelos do MediaPipe (~17 MB)
   download_vlibrasil.sh   base de sinais do espelho no Kaggle (~10,8 GB)
@@ -807,6 +920,7 @@ Do modo sinais:
 | `SEGUNDOS_MAXIMO_SINAL` | 4,0 | corta em vez de gravar para sempre |
 | `CANDIDATOS_NA_TELA` | 5 | quantas palavras a busca devolve |
 | `BANDA_DTW` | 0,2 | desvio máximo da diagonal no alinhamento |
+| `REJEICAO_COSSENO` | 0,4723 | acima disto o app diz "não reconheci"; `None` desliga |
 
 Do encoder neural:
 
@@ -820,7 +934,14 @@ Do encoder neural:
 | `ARCFACE_ESCALA` | 32,0 | dureza do softmax sobre a esfera |
 | `ENC_AUG_*` | — | rotação, escala, ruído e deformação de ritmo do aumento |
 | `VOCABULARIO_ABERTO` | 200 | sinais fora do treino, medidos à parte |
-| `BASELINE_DTW_RECALL5` | 0,075 | o número que o encoder tem que bater |
+| `BASELINE_DTW_RECALL5` | 0,075 | o número a bater no vocabulário inteiro |
+| `BASELINE_DTW_NUCLEO_RECALL5` | 0,214 | o número a bater no núcleo |
+
+O vocabulário núcleo em si é uma lista, não um parâmetro: está em
+[`libras/nucleo.py`](libras/nucleo.py), agrupado por tema. Acrescentar uma
+palavra é acrescentar uma linha — e vale rodar o treino de novo, porque o
+encoder é treinado nas classes que ele vai responder. `nucleo.ausentes` recusa
+uma palavra que não exista no V-LIBRASIL em vez de deixá-la sumir em silêncio.
 
 ---
 
@@ -830,7 +951,7 @@ Do encoder neural:
 python -m pytest tests/ -q
 ```
 
-347 testes, ~4s, sem câmera, sem vídeo, sem dataset e sem modelo treinado.
+380 testes, ~4s, sem câmera, sem vídeo, sem dataset e sem modelo treinado.
 Cobrem normalização (das duas), estabilização, soletração, aumento de dados,
 recuperação de imagens, rejeição, diversidade da coleta, modo prática, imputação
 temporal, segmentação de sinais, DTW, busca no dicionário, re-ancoragem, as
@@ -871,13 +992,21 @@ N antes da cascata de recuperação.
 modelo tem todo incentivo para aprender as pessoas. O leave-one-articulator-out
 mede isso e a re-ancoragem corrige no uso — mas a base é essa.
 
-**recall@5 de 10,3% com o encoder, 7,5% com o DTW.** Medido, não estimado: 4.086
-consultas em leave-one-articulator-out. A busca está correta (auto-recuperação
-6/6) e os vetores são sadios — o que falha é a representação generalizar entre
-pessoas, e aprender a distância melhorou isso em 1,4x sem resolver. **Não é um
-dicionário utilizável ainda.** Com três gravações por sinal, o gargalo que resta
-é dado e não objetivo — e a re-ancoragem é o que torna o modo `--sinais` útil
-hoje, para a sua própria mão.
+**recall@5 de 37,3% no vocabulário núcleo; 10,3% nas 1.364 palavras.** Medido,
+não estimado: 490 e 4.086 consultas em leave-one-articulator-out. A busca está
+correta (auto-recuperação 6/6) e os vetores são sadios — o que falha é a
+representação generalizar entre pessoas, e as duas coisas que ajudaram foram
+recortar o vocabulário (2,9x) e treinar o encoder nele (1,7x).
+
+**37,3% ainda não é um dicionário que você usa sem pensar**: em duas de cada
+três consultas a palavra certa não aparece. É utilizável para explorar e para
+aprender, e é 5x o ponto de partida. Com três gravações por sinal o gargalo que
+resta é dado e não objetivo — e a re-ancoragem é o que empurra esse número para
+cima na sua própria mão, sem retreinar nada.
+
+**O vocabulário é 163 palavras.** Tudo fora dele o app erra por construção, e o
+limiar de rejeição só pega 8,5% desses casos. Sinalizar algo que não está na
+lista quase sempre devolve cinco palavras erradas com aparência de resposta.
 
 **Sem expressão facial.** É fonema em Libras, e sinais que só diferem por ela
 vão colidir. 468 pontos de rosto sobre três amostras por classe seria ruído
@@ -896,27 +1025,40 @@ número do qual tudo abaixo dependia.
 
 ~~2. Encoder neural com metric learning.~~ **Feito.** 10,3% de recall@5 no mesmo
 leave-one-articulator-out, registrado em `models/relatorio_encoder.txt`. Bateu a
-baseline por 1,4x, e é esse resultado que aponta para o item 1 atual: o que falta
-não é objetivo de treino, é dado.
+baseline por 1,4x — e mostrou que o que falta não é objetivo de treino, é dado.
+
+~~3. Vocabulário núcleo.~~ **Feito.** 37,3% de recall@5 em 163 sinais do dia a
+dia, contra 7,5% no ponto de partida. Recortar o índice vale 2,9x e treinar o
+encoder no vocabulário que ele responde vale mais 1,7x. Foi a resposta para "o
+alfabeto funciona e os sinais não": a promessa era grande demais para o dado.
 
 Em ordem de valor:
 
-1. **Mais de três gravações por sinal — o gargalo é aqui.** O encoder tinha duas
-   por classe em cada rodízio e melhorou 1,4x; nenhuma arquitetura resolve
-   few-shot com o objetivo já correto. Duas saídas: outra base de Libras isolada
-   somada ao V-LIBRASIL, ou re-ancoragem em escala — as gravações que a própria
-   pessoa faz no uso já são protótipos e já entram sem retreino.
-2. **A máscara de validade na representação.** Ela é calculada, viaja em
+1. **Mais de três gravações por sinal — o gargalo continua aqui.** O recorte de
+   vocabulário comprou 5x sem tocar no dado, e não compra de novo: encolher mais
+   a lista começa a tirar palavras que a pessoa quer. Duas saídas: outra base de
+   Libras isolada somada ao V-LIBRASIL, ou re-ancoragem em escala — as gravações
+   que a própria pessoa faz no uso já são protótipos e já entram sem retreino.
+2. **Pré-treino numa base com muitos sinalizadores.** A raiz do problema é
+   invariância a pessoa, e nenhuma base de Libras isolada tem mais de três. Uma
+   base grande de outra língua de sinais (AUTSL tem 43 sinalizadores) ensinaria
+   isso, e o encoder transferiria: os 29,8% da linha "treinado em tudo" já
+   provam que a representação atravessa vocabulários. É o item mais caro e o de
+   maior teto.
+3. **A máscara de validade na representação.** Ela é calculada, viaja em
    `Sequencia.validade` e é **descartada** por `vetores` — hoje um ponto imputado
    entra na distância como se tivesse sido medido. Usá-la exige guardar a máscara
    junto dos protótipos, o que muda o formato do `dicionario.npz` e custa uma
    re-extração de 55 min. É a última melhoria barata que sobrou na representação.
-3. **Conjunto de avaliação separado do alfabeto.** Uma sessão de gravação em
+4. **Uma rejeição que funcione.** A atual corta 8,5% das consultas sem resposta
+   porque a distância do cosseno não é confiança. A margem entre o primeiro e o
+   segundo candidato é um sinal melhor e não custa treino nenhum — vale medir.
+5. **Conjunto de avaliação separado do alfabeto.** Uma sessão de gravação em
    outro dia, outra luz, outra roupa, usada só como teste. É o que transforma
    "achei que melhorou" em evidência.
-4. **Features geométricas no alfabeto** — ângulos entre dedos e distâncias
+6. **Features geométricas no alfabeto** — ângulos entre dedos e distâncias
    ponta-a-ponta somados às coordenadas cruas, mirando U/V e B/W.
-5. **Autocorreção com dicionário PT-BR** — um erro em dez letras arruína a
+7. **Autocorreção com dicionário PT-BR** — um erro em dez letras arruína a
    palavra inteira; a palavra em andamento já aparece destacada.
 
 ---

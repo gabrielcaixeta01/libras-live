@@ -6,45 +6,55 @@ arquitetura .............. GRU bidirecional 2x256 → embedding 256d
 entrada .................. 32×294 (posição + velocidade)
 perda .................... ArcFace (margem 0.3, escala 32.0)
 épocas por rodízio ....... 60
-protótipos ............... 4086
-sinais distintos ......... 1363
-vocabulário aberto ....... 200 sinais fora do treino
+protótipos ............... 490
+sinais distintos ......... 163
+vocabulário do índice .... núcleo, 163 sinais (e o treino também)
+vocabulário aberto ....... 0 sinais fora do treino
 dispositivo .............. mps
-tempo total .............. 9.1 min
+tempo total .............. 1.1 min
 
 ------------------------------------------------------------------------
 RODÍZIOS
 ------------------------------------------------------------------------
 
-  sem articulador_1  1364 consultas   recall@1   4.9%   recall@5  12.8%   MRR   7.7%
-  sem articulador_2  1360 consultas   recall@1   3.4%   recall@5   8.2%   MRR   5.1%
-  sem articulador_3  1362 consultas   recall@1   3.2%   recall@5   9.9%   MRR   5.5%
+  sem articulador_1   164 consultas   recall@1  18.3%   recall@5  37.8%   MRR  25.1%
+  sem articulador_2   163 consultas   recall@1  17.2%   recall@5  38.0%   MRR  24.6%
+  sem articulador_3   163 consultas   recall@1  13.5%   recall@5  36.2%   MRR  21.5%
 
-  TOTAL             4086 consultas   recall@1   3.8%   recall@5  10.3%   MRR   6.1%
+  TOTAL              490 consultas   recall@1  16.3%   recall@5  37.3%   MRR  23.7%
 
 ------------------------------------------------------------------------
-VOCABULÁRIO ABERTO
+LIMIAR DE REJEIÇÃO
 ------------------------------------------------------------------------
 
-  200 sinais que o encoder nunca viu no treino, presentes
-  no índice apenas como protótipo:
+  Acima desta distância o app diz 'não reconheci' em vez de mostrar
+  cinco palavras. Sem limiar ele sempre responde, e com 163 sinais no
+  índice quase tudo que existe está fora dele — as 307 consultas
+  sem resposta possível abaixo são o caso que ele existe para pegar.
 
-                     600 consultas   recall@1   4.3%   recall@5  12.3%   MRR   7.1%
+   cobertura    corte  listas com resposta  invenção cortada
+      99.5%   0.5098                38.1%              3.6%
+      95.1%   0.4723                38.2%              8.5% <-
+      90.2%   0.4503                38.7%             15.0%
+      80.3%   0.4114                39.2%             25.7%
 
-  É a medida da promessa do dicionário: um sinal novo entra com uma
-  gravação e passa a ser encontrável, sem retreinar nada.
+  Escolhido: 0.4723, preservando 95.1% dos
+  acertos e recusando 8.5% do que não tinha resposta.
+  A coluna que decide é a primeira: num dicionário, uma lista errada
+  custa um olhar, e um acerto apagado custa a resposta.
+
+  Ponha em config.REJEICAO_COSSENO: 0.4723
 
 ------------------------------------------------------------------------
 VEREDITO SOBRE O TORCH
 ------------------------------------------------------------------------
 
-  baseline DTW (mesmo protocolo) .... recall@5 7.5%
-  encoder .......................... recall@5 10.3%
+  baseline DTW (mesmo protocolo) .... recall@5 21.4%  [núcleo, 163 sinais]
+  encoder .......................... recall@5 37.3%
 
-  DECISÃO DO DONO. Ganho real (1.4x sobre
-  a baseline) mas abaixo da margem clara de 1.5x que justificaria
-  o torch sozinho. Vale tentar mais épocas ou mais aumento antes de
-  decidir.
+  O TORCH ENTRA. 1.7x a baseline DTW no mesmo
+  protocolo, com o mesmo dado e a mesma busca. A representação era o
+  gargalo, e aprender a distância foi o que o destravou.
 
 ------------------------------------------------------------------------
 COMO LER

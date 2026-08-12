@@ -24,7 +24,7 @@ from typing import Callable
 import cv2
 import numpy as np
 
-from . import config, desenho, pose, sequencia, ui
+from . import config, desenho, nucleo, pose, sequencia, ui
 from .camera import Camera, CameraIndisponivel
 from .detector import DetectorSinais
 from .dicionario import FONTE_USUARIO, Dicionario
@@ -54,7 +54,7 @@ class Busca:
     prototipos: Path
 
 
-def carregar_busca() -> Busca:
+def carregar_busca(apenas_nucleo: bool = True) -> Busca:
     """Prefere o encoder quando ele existe; cai na baseline DTW quando não.
 
     Quem rodou `training/train_sinais.py` ganha o encoder sem mexer em nada, e
@@ -62,7 +62,7 @@ def carregar_busca() -> Busca:
     sabe qual dos dois está em uso.
     """
     if not config.DICIONARIO_EMBEDDINGS.exists():
-        return _busca_dtw()
+        return _busca_dtw(apenas_nucleo)
 
     try:
         from . import encoder
@@ -72,7 +72,7 @@ def carregar_busca() -> Busca:
             "DTW.\nPara usar o encoder: pip install torch",
             file=sys.stderr,
         )
-        return _busca_dtw()
+        return _busca_dtw(apenas_nucleo)
 
     if not config.ENCODER_SINAIS.exists():
         raise FileNotFoundError(
@@ -93,7 +93,9 @@ def carregar_busca() -> Busca:
     )
 
     dicionario = carregar_dicionario(
-        config.DICIONARIO_EMBEDDINGS, config.PROTOTIPOS_USUARIO_EMBEDDINGS
+        config.DICIONARIO_EMBEDDINGS,
+        config.PROTOTIPOS_USUARIO_EMBEDDINGS,
+        apenas_nucleo=apenas_nucleo,
     )
 
     return Busca(
@@ -103,18 +105,25 @@ def carregar_busca() -> Busca:
     )
 
 
-def _busca_dtw() -> Busca:
+def _busca_dtw(apenas_nucleo: bool = True) -> Busca:
     return Busca(
-        dicionario=carregar_dicionario(),
+        dicionario=carregar_dicionario(apenas_nucleo=apenas_nucleo),
         representar=lambda pronta: pronta.vetores,
         prototipos=config.PROTOTIPOS_USUARIO,
     )
 
 
 def carregar_dicionario(
-    base: Path | None = None, meus: Path | None = None
+    base: Path | None = None,
+    meus: Path | None = None,
+    apenas_nucleo: bool = True,
 ) -> Dicionario:
-    """O dicionário base mais os seus protótipos, se existirem."""
+    """O dicionário base mais os seus protótipos, se existirem.
+
+    O recorte do núcleo vale só para o que veio do V-LIBRASIL: o que você
+    ensinou entra sempre, esteja ou não na lista curada. Ensinar um sinal que o
+    núcleo não tem é justamente o caso em que o recorte não pode atrapalhar.
+    """
     base = base or config.DICIONARIO_SINAIS
     meus = meus or config.PROTOTIPOS_USUARIO
 
@@ -126,6 +135,8 @@ def carregar_dicionario(
         )
 
     dicionario = Dicionario.carregar(base)
+    if apenas_nucleo:
+        dicionario = dicionario.restringir(nucleo.CHAVES)
 
     if meus.exists():
         seus = Dicionario.carregar(meus)
@@ -151,14 +162,20 @@ def _prototipos_da_metrica(metrica: str) -> Path:
     return config.PROTOTIPOS_USUARIO
 
 
-def executar() -> int:
+def executar(apenas_nucleo: bool = True) -> int:
     try:
-        busca = carregar_busca()
+        busca = carregar_busca(apenas_nucleo)
     except (FileNotFoundError, ValueError) as erro:
         print(erro, file=sys.stderr)
         return 1
 
     dicionario = busca.dicionario
+
+    # O limiar foi calibrado com 163 sinais no índice. Com 1.364, o vizinho mais
+    # próximo é sempre mais próximo — o mesmo corte passaria a aceitar quase
+    # tudo, e um limiar frouxo é pior que nenhum: ele promete uma recusa que não
+    # acontece. Em `--tudo` a rejeição fica desligada e assumida como desligada.
+    limiar = config.limiar_de_rejeicao(dicionario.metrica) if apenas_nucleo else None
 
     try:
         camera = Camera()
@@ -175,7 +192,8 @@ def executar() -> int:
     )
 
     print(f"{len(dicionario.vocabulario)} sinais no dicionário "
-          f"({len(dicionario)} protótipos, métrica {dicionario.metrica})")
+          f"({len(dicionario)} protótipos, métrica {dicionario.metrica}"
+          f"{', vocabulário núcleo' if apenas_nucleo else ', vocabulário inteiro'})")
     print(AJUDA)
 
     inicio = time.perf_counter()
@@ -183,6 +201,7 @@ def executar() -> int:
     fps = 0.0
 
     candidatos: list = []
+    recusado = False             # a última gravação bateu longe demais de tudo
     ultima_consulta = None       # a representação da última gravação, para re-ancorar
     instante_resultado = 0.0
     aprendidos = 0
@@ -226,13 +245,23 @@ def executar() -> int:
                         candidatos = dicionario.buscar(
                             ultima_consulta, k=config.CANDIDATOS_NA_TELA
                         )
+                        # Sem isto o dicionário sempre responde: um sinal que ele
+                        # não tem devolve os cinco mais parecidos com cara de
+                        # resposta. Com 163 sinais no índice, o que está fora é a
+                        # maioria do que existe.
+                        recusado = bool(candidatos) and (
+                            limiar is not None and candidatos[0].distancia > limiar
+                        )
+                        if recusado:
+                            candidatos = []
                         instante_resultado = agora
                     except ValueError:
                         # Gravação sem âncora em frame nenhum: nada a consultar.
-                        ultima_consulta, candidatos = None, []
+                        ultima_consulta, candidatos, recusado = None, [], False
 
                 if agora - instante_resultado > config.SEGUNDOS_MOSTRANDO:
                     candidatos = []
+                    recusado = False
 
                 ui.desenhar_esqueleto(
                     frame_bgr, deteccao.maos_cruas, deteccao.corpo_cru
@@ -246,6 +275,10 @@ def executar() -> int:
 
                 if candidatos:
                     ui.desenhar_candidatos(frame_bgr, candidatos, AJUDA)
+                elif recusado:
+                    ui.desenhar_aviso(
+                        frame_bgr, "não reconheci — N ensina este sinal"
+                    )
                 elif not deteccao.tem_corpo:
                     ui.desenhar_aviso(frame_bgr, "corpo fora de quadro — afaste-se")
 
@@ -257,7 +290,7 @@ def executar() -> int:
                     break
 
                 if tecla == TECLA_LIMPAR:
-                    candidatos = []
+                    candidatos, recusado = [], False
                     segmentador.reiniciar()
                 elif (
                     tecla in TECLAS_CANDIDATO
@@ -277,7 +310,7 @@ def executar() -> int:
                         dicionario.ancorar(ultima_consulta, rotulo)
                         aprendidos += 1
                         print(f"aprendido: {rotulo} (sinal novo)")
-                        candidatos = []
+                        candidatos, recusado = [], False
     except KeyboardInterrupt:
         print()  # o ^C fica na linha do terminal; a mensagem abaixo merece a sua
     finally:
@@ -305,8 +338,16 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m libras.app --sinais",
         description="Dicionário reverso de sinais de Libras.",
     )
-    analisador.parse_args(argv)
-    return executar()
+    analisador.add_argument(
+        "--tudo",
+        action="store_true",
+        help=(
+            "indexa as 1.364 palavras do V-LIBRASIL em vez do vocabulário núcleo. "
+            "Mais cobertura e muito menos acerto: 10,3%% de recall@5 contra 37,3%%"
+        ),
+    )
+    args = analisador.parse_args(argv)
+    return executar(apenas_nucleo=not args.tudo)
 
 
 if __name__ == "__main__":

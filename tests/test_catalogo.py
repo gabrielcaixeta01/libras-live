@@ -41,6 +41,35 @@ def test_caminho_completo_usa_so_o_nome():
 # --- chave de comparação ---
 
 
+# --- fonte de símbolos ---
+#
+# Três nomes do V-LIBRASIL vieram escritos numa fonte de símbolos, e o caractere
+# atravessou o download como área privada Unicode. Sem tradução, `O QUÊ?` vira um
+# quadrado vazio na tela e uma chave que não casa com nada escrito à mão.
+
+
+@pytest.mark.parametrize(
+    "arquivo, esperado",
+    [
+        ("O QU\u00ca\uf03f.mp4", "O QU\u00ca?"),
+        ("C\u00c9REBRO (DE \uf022ERVILHA\uf022).mp4", 'C\u00c9REBRO (DE "ERVILHA")'),
+        ("FRENTE\uf05c\u00c1 FRENTE.mp4", "FRENTE\\\u00c1 FRENTE"),
+    ],
+)
+def test_area_privada_vira_o_caractere_que_ela_representa(arquivo, esperado):
+    """Escrito com escapes de propósito: o caractere cru \uf03f e invisivel."""
+    assert catalogo.rotulo_do_arquivo(arquivo) == esperado
+
+
+def test_chave_traduz_area_privada_de_dicionario_ja_gravado():
+    """Sem isto, re-extrair 4.086 vídeos seria o único jeito de casar o rótulo."""
+    assert catalogo.chave("O QU\u00ca\uf03f") == "O QUE?"
+
+
+def test_chave_da_area_privada_casa_com_a_grafia_normal():
+    assert catalogo.chave("O QU\u00ca\uf03f") == catalogo.chave("o qu\u00ea?")
+
+
 def test_chave_ignora_acento_e_caixa():
     assert catalogo.chave("AMANHÃ") == catalogo.chave("amanha")
 

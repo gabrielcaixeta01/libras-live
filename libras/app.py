@@ -31,6 +31,14 @@ def main(argv: list[str] | None = None) -> int:
         help="dicionário reverso de sinais: você sinaliza, ele mostra 5 candidatos",
     )
     analisador.add_argument(
+        "--tudo",
+        action="store_true",
+        help=(
+            "com --sinais: indexa as 1.364 palavras em vez do vocabulário núcleo. "
+            "Mais cobertura, muito menos acerto"
+        ),
+    )
+    analisador.add_argument(
         "--praticar",
         action="store_true",
         help="modo treino do alfabeto: o app pede uma letra e confere",
@@ -47,11 +55,13 @@ def main(argv: list[str] | None = None) -> int:
         analisador.error("--rodadas deve ser >= 1")
     if argumentos.sinais and argumentos.praticar:
         analisador.error("--sinais e --praticar são modos diferentes; escolha um")
+    if argumentos.tudo and not argumentos.sinais:
+        analisador.error("--tudo só vale com --sinais; o alfabeto tem 26 letras")
 
     if argumentos.sinais:
         from .app_sinais import executar
 
-        return executar()
+        return executar(apenas_nucleo=not argumentos.tudo)
 
     from .alfabeto.app import executar
 

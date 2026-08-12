@@ -22,6 +22,15 @@ _REPETICAO = re.compile(r"[\s_\-]*(?:\(|\[)?(?:v|rep|take)?\s*\d{1,3}(?:\)|\])?$
 _SEPARADORES = re.compile(r"[_\-\.]+")
 _ESPACOS = re.compile(r"\s+")
 
+# Alguns nomes do V-LIBRASIL foram escritos numa fonte de símbolos, e o caractere
+# atravessou o download como **área privada** Unicode: U+F03F no lugar de `?`,
+# U+F022 no lugar de aspas, U+F05C no lugar de barra. São três rótulos em 1.364
+# (`O QUÊ?`, `CÉREBRO (DE "ERVILHA")`, `FRENTE\Á FRENTE`), e cada um custa duas
+# coisas: um quadrado vazio na tela e uma chave que não casa com a palavra
+# escrita à mão em lugar nenhum. A convenção dessas fontes é somar 0xF000 ao
+# código ASCII, então desfazer é subtrair.
+_AREA_PRIVADA = {codigo: codigo - 0xF000 for codigo in range(0xF020, 0xF100)}
+
 
 def rotulo_do_arquivo(caminho: str | Path) -> str:
     """Nome do arquivo → rótulo do sinal, em maiúsculas e sem sufixo de repetição.
@@ -30,7 +39,7 @@ def rotulo_do_arquivo(caminho: str | Path) -> str:
     quem escreve o rótulo na tela é este projeto, e escrever errado seria pior
     que agrupar errado. A comparação entre rótulos usa `chave`.
     """
-    nome = Path(caminho).stem
+    nome = Path(caminho).stem.translate(_AREA_PRIVADA)
     nome = _SEPARADORES.sub(" ", nome)
     nome = _REPETICAO.sub("", nome)
     return _ESPACOS.sub(" ", nome).strip().upper()
@@ -41,8 +50,12 @@ def chave(rotulo: str) -> str:
 
     Serve para juntar `AMANHÃ` e `AMANHA` vindos de arquivos escritos por
     pessoas diferentes, sem que nenhum dos dois vire o rótulo exibido.
+
+    A tradução da área privada acontece aqui também, e não só na extração:
+    dicionários já gravados carregam os rótulos corrompidos, e re-extrair 4.086
+    vídeos por causa de três caracteres custaria 55 minutos.
     """
-    sem_acento = unicodedata.normalize("NFKD", rotulo)
+    sem_acento = unicodedata.normalize("NFKD", rotulo.translate(_AREA_PRIVADA))
     sem_acento = "".join(c for c in sem_acento if not unicodedata.combining(c))
     return _ESPACOS.sub(" ", sem_acento).strip().upper()
 

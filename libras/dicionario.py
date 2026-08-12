@@ -26,12 +26,13 @@ com cosseno depois.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from . import dtw
+from . import catalogo, dtw
 
 FONTE_USUARIO = "voce"
 
@@ -213,6 +214,21 @@ class Dicionario:
 
         consultas = [(self._representacoes[i], self._rotulos[i]) for i in fora]
         return self._subconjunto(dentro), consultas
+
+    def restringir(self, chaves: Iterable[str]) -> "Dicionario":
+        """O dicionário reduzido a um vocabulário — o que sustenta o núcleo.
+
+        Com 1.363 sinais no índice a resposta certa aparece em 7,5% das
+        consultas; com uma centena, em 24%. Menos candidatos é literalmente menos
+        chance de errar, e é a única melhora que não depende de mais dado.
+
+        A comparação passa por `catalogo.chave`, então quem chama escreve
+        `AMANHÃ` ou `AMANHA` sem consequência.
+        """
+        alvo = {catalogo.chave(c) for c in chaves}
+        return self._subconjunto(
+            i for i, r in enumerate(self._rotulos) if catalogo.chave(r) in alvo
+        )
 
     def apenas(self, fonte: str) -> "Dicionario":
         """Só os protótipos de uma fonte — é o que se grava em disco ao sair."""

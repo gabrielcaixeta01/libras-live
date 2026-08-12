@@ -157,7 +157,66 @@ def test_limitar_sinais_mantem_todas_as_gravacoes_dos_escolhidos():
     assert len(recortado) == 2 * len(ARTICULADORES)
 
 
+def test_restringir_ao_nucleo_mantem_so_o_vocabulario_curado(monkeypatch):
+    monkeypatch.setattr(train_sinais.nucleo, "CHAVES", frozenset({"SINAL1", "SINAL3"}))
+    recortado = train_sinais.restringir_ao_nucleo(amostras(6))
+
+    assert set(recortado.chaves) == {"SINAL1", "SINAL3"}
+    assert len(recortado) == 2 * len(ARTICULADORES)
+
+
 # --- avaliação ---
+
+
+def test_avaliar_recorta_o_indice_ao_vocabulario_pedido():
+    """O recorte vale para o índice e para as consultas: é o app como entregue."""
+    dados = amostras(6)
+    modelo = encoder.Codificador(hp_pequeno()).eval()
+
+    rodizio = train_sinais.avaliar(
+        modelo,
+        dados,
+        "articulador_1",
+        abertos=set(),
+        dispositivo=torch.device("cpu"),
+        chaves_indice=frozenset({"SINAL0", "SINAL1"}),
+    )
+
+    assert len(rodizio.posicoes) == 2
+
+
+def test_avaliar_junta_as_consultas_de_fora_do_indice_na_calibracao():
+    """Os sinais que o índice não tem são a metade negativa do limiar.
+
+    Sem eles o corte sairia de consultas que todas tinham resposta possível, e o
+    limiar não pegaria justamente o caso que ele existe para pegar.
+    """
+    dados = amostras(6)
+    modelo = encoder.Codificador(hp_pequeno()).eval()
+
+    rodizio = train_sinais.avaliar(
+        modelo,
+        dados,
+        "articulador_1",
+        abertos=set(),
+        dispositivo=torch.device("cpu"),
+        chaves_indice=frozenset({"SINAL0", "SINAL1"}),
+    )
+
+    # 2 consultas de dentro + 4 sinais de fora, todos do articulador de teste.
+    assert len(rodizio.confiancas) == 6
+    assert sum(1 for _, certo in rodizio.confiancas if not certo) >= 4
+
+
+def test_sem_recorte_nao_ha_consulta_de_fora():
+    dados = amostras(4)
+    modelo = encoder.Codificador(hp_pequeno()).eval()
+
+    rodizio = train_sinais.avaliar(
+        modelo, dados, "articulador_1", abertos=set(), dispositivo=torch.device("cpu")
+    )
+
+    assert len(rodizio.confiancas) == 4
 
 
 def test_avaliar_consulta_com_o_articulador_que_ficou_fora():
@@ -243,6 +302,71 @@ def test_treinar_aproxima_o_mesmo_sinal_de_pessoas_diferentes():
     ]
 
     assert np.mean(iguais) > np.mean(diferentes)
+
+
+# --- limiar de rejeição ---
+
+
+def test_o_limiar_separa_o_que_tem_resposta_do_que_nao_tem():
+    """Distâncias baixas acertam, altas não: o corte tem que cair no meio."""
+    confiancas = [(0.1, True), (0.2, True), (0.8, False), (0.9, False)]
+    corte = train_sinais.calibrar_rejeicao(confiancas)
+
+    assert 0.2 <= corte.limiar < 0.8
+    assert corte.aceitos_certos == 2
+    assert corte.aceitos_errados == 0
+    assert corte.precisao == 1.0
+    assert corte.cobertura == 1.0
+    assert corte.recusa_correta == 1.0
+
+
+def test_o_corte_preserva_a_cobertura_pedida():
+    """A regra é um quantil dos acertos, e é isso que o app promete manter."""
+    confiancas = [(i / 100, True) for i in range(100)]
+    corte = train_sinais.calibrar_rejeicao(confiancas, cobertura_minima=0.90)
+
+    assert corte.cobertura >= 0.90
+    assert corte.limiar == pytest.approx(0.89)
+
+
+def test_cobertura_mais_alta_nao_corta_menos():
+    """Pedir mais acertos preservados só pode afrouxar o corte."""
+    confiancas = [(0.1, True), (0.5, True), (0.6, False), (0.9, True)]
+
+    frouxo = train_sinais.calibrar_rejeicao(confiancas, cobertura_minima=1.0)
+    apertado = train_sinais.calibrar_rejeicao(confiancas, cobertura_minima=0.5)
+
+    assert frouxo.limiar >= apertado.limiar
+    assert frouxo.cobertura == 1.0
+
+
+def test_o_limiar_conta_o_que_ele_custa():
+    """Nenhum corte separa tudo, e o relatório precisa dizer o que se perde."""
+    confiancas = [(0.1, True), (0.5, False), (0.6, True), (0.9, False)]
+    corte = train_sinais.calibrar_rejeicao(confiancas)
+
+    assert corte.aceitos_certos + corte.recusados_certos == 2
+    assert corte.aceitos_errados + corte.recusados_errados == 2
+    assert 0.0 <= corte.precisao <= 1.0
+
+
+def test_sem_acerto_nenhum_nao_ha_o_que_calibrar():
+    """O corte é um quantil dos acertos; sem acertos ele sairia do acaso."""
+    assert train_sinais.calibrar_rejeicao([(0.1, False)]) is None
+    assert train_sinais.calibrar_rejeicao([]) is None
+
+
+def test_so_acertos_aceita_tudo():
+    """Sem consulta errada nenhuma, o limiar não tem o que recusar."""
+    corte = train_sinais.calibrar_rejeicao([(0.1, True), (0.2, True)])
+
+    assert corte.aceitos_certos == 2
+    assert corte.recusados_errados == 0
+
+
+def test_cobertura_invalida_e_recusada():
+    with pytest.raises(ValueError):
+        train_sinais.calibrar_rejeicao([(0.1, True)], cobertura_minima=0.0)
 
 
 # --- veredito e relatório ---

@@ -81,6 +81,10 @@ PROTOTIPOS_USUARIO_EMBEDDINGS = DIR_SINAIS / "meus_prototipos_embeddings.npz"
 ENCODER_SINAIS = RAIZ / "models" / "encoder_sinais.pt"
 RELATORIO_ENCODER = RAIZ / "models" / "relatorio_encoder.txt"
 
+# As distâncias medidas nos rodízios, com "a resposta estava na lista?" ao lado.
+# É o que permite escolher outro limiar de rejeição sem repetir os três treinos.
+CONFIANCAS_REJEICAO = RAIZ / "models" / "confiancas_rejeicao.npz"
+
 # --- Segmentação (libras/sinais/segmenter.py) ---
 # Velocidade em larguras de ombro por segundo — mesma invariante da
 # normalização, então chegar perto da câmera não dispara sinal sozinho.
@@ -95,11 +99,44 @@ CANDIDATOS_NA_TELA = 5   # é um dicionário, não um tradutor: cinco é respost
 BANDA_DTW = 0.2          # desvio máximo da diagonal no alinhamento temporal
 SEGUNDOS_MOSTRANDO = 4.0  # quanto tempo o resultado fica na tela
 
+# --- Rejeição nos sinais ---
+# O índice tem 163 sinais e a Libras tem milhares: quase tudo que você pode
+# sinalizar está fora dele. Sem limiar a busca responde assim mesmo, com os cinco
+# mais parecidos e a mesma cara de resposta — a versão em sinais do problema que
+# CONFIANCA_REJEICAO resolve no alfabeto.
+#
+# Calibrado por training/train_sinais.py --treino-nucleo: o quantil 95% das
+# distâncias que acertaram, medido nos rodízios junto com 307 gravações de
+# sinais fora do núcleo. Ver models/relatorio_encoder.txt.
+#
+# **O que ele compra é pouco, e o relatório mostra isso.** As duas distribuições
+# se sobrepõem: preservando 95% dos acertos, o corte recusa só 8,5% das consultas
+# que não tinham resposta. Custa ~1,8 ponto de recall@5 (37,3% → 35,5%) e em
+# troca o app para de inventar nos piores casos. A distância do cosseno não é
+# confiança, e enquanto ela for o único sinal disponível o limiar fica assim.
+REJEICAO_COSSENO: float | None = 0.4723
+
+# A baseline DTW não tem limiar calibrado: a distância dela não tem a mesma
+# escala e o número que vale é o do encoder, que é o que o app usa. None desliga
+# a rejeição em vez de inventar um corte.
+REJEICAO_DTW: float | None = None
+
+
+def limiar_de_rejeicao(metrica: str) -> float | None:
+    """A distância acima da qual o app diz "não reconheci". None não rejeita nada."""
+    return {"cosseno": REJEICAO_COSSENO, "dtw": REJEICAO_DTW}.get(metrica)
+
 # --- Encoder neural (training/train_sinais.py) ---
 # O número que o encoder existe para bater, medido pela baseline DTW no mesmo
 # leave-one-articulator-out e registrado em models/relatorio_sinais.txt. Está
 # aqui para que o relatório do encoder possa dar veredito sozinho.
 BASELINE_DTW_RECALL5 = 0.075
+
+# O mesmo número, no vocabulário núcleo — que é o que o app indexa por padrão.
+# Medido com `python training/eval_sinais.py --nucleo` sobre 490 consultas.
+# São 2,9x o vocabulário inteiro sem trocar nada na busca: só há 163 sinais para
+# confundir em vez de 1.363.
+BASELINE_DTW_NUCLEO_RECALL5 = 0.214
 
 DIMENSAO_EMBEDDING = 256   # o vetor que substitui a sequência de 32×147
 ENC_OCULTO = 256           # unidades por direção da GRU
