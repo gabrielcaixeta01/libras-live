@@ -74,6 +74,13 @@ DICIONARIO_SINAIS = DIR_SINAIS / "dicionario.npz"
 PROTOTIPOS_USUARIO = DIR_SINAIS / "meus_prototipos.npz"
 RELATORIO_SINAIS = RAIZ / "models" / "relatorio_sinais.txt"
 
+# O dicionário do encoder: mesmos protótipos, guardados como embedding. Quando
+# ele existe, o app prefere ele — ver `app_sinais.carregar_busca`.
+DICIONARIO_EMBEDDINGS = DIR_SINAIS / "dicionario_embeddings.npz"
+PROTOTIPOS_USUARIO_EMBEDDINGS = DIR_SINAIS / "meus_prototipos_embeddings.npz"
+ENCODER_SINAIS = RAIZ / "models" / "encoder_sinais.pt"
+RELATORIO_ENCODER = RAIZ / "models" / "relatorio_encoder.txt"
+
 # --- Segmentação (libras/sinais/segmenter.py) ---
 # Velocidade em larguras de ombro por segundo — mesma invariante da
 # normalização, então chegar perto da câmera não dispara sinal sozinho.
@@ -87,3 +94,36 @@ SEGUNDOS_MAXIMO_SINAL = 4.0  # corta em vez de gravar para sempre
 CANDIDATOS_NA_TELA = 5   # é um dicionário, não um tradutor: cinco é resposta boa
 BANDA_DTW = 0.2          # desvio máximo da diagonal no alinhamento temporal
 SEGUNDOS_MOSTRANDO = 4.0  # quanto tempo o resultado fica na tela
+
+# --- Encoder neural (training/train_sinais.py) ---
+# O número que o encoder existe para bater, medido pela baseline DTW no mesmo
+# leave-one-articulator-out e registrado em models/relatorio_sinais.txt. Está
+# aqui para que o relatório do encoder possa dar veredito sozinho.
+BASELINE_DTW_RECALL5 = 0.075
+
+DIMENSAO_EMBEDDING = 256   # o vetor que substitui a sequência de 32×147
+ENC_OCULTO = 256           # unidades por direção da GRU
+ENC_CAMADAS = 2
+ENC_DROPOUT = 0.3          # 2 gravações por classe: sem isto ele decora
+ENC_EPOCAS = 60
+ENC_LOTE = 64
+ENC_TAXA = 1e-3            # AdamW com cosseno até quase zero
+ENC_DECAIMENTO = 1e-4
+
+# ArcFace: margem angular sobre 1.363 classes de 2 exemplos. A margem sobe de 0
+# até este valor no primeiro terço do treino — começar já com ela põe a perda
+# num platô do qual ela não sai.
+ARCFACE_MARGEM = 0.30
+ARCFACE_ESCALA = 32.0
+
+# Aumento de dados dos sinais. Modesto pelo mesmo motivo do alfabeto: precisa
+# gerar o mesmo sinal visto de outro jeito, não outro sinal. Sem espelhamento —
+# lado é fonema aqui, e trocar a mão trocaria a palavra.
+ENC_AUG_ROTACAO_GRAUS = 8.0   # giro em torno do eixo vertical e do da câmera
+ENC_AUG_ESCALA = 0.10         # ±10% no tamanho aparente
+ENC_AUG_RUIDO = 0.015         # sigma, em larguras de ombro
+ENC_AUG_TEMPO = 0.20          # deformação do ritmo, mantendo começo e fim
+
+# Vocabulário aberto: sinais retirados do treino do encoder que entram só como
+# protótipo. É o que mede a promessa "adiciono um sinal novo com uma gravação".
+VOCABULARIO_ABERTO = 200

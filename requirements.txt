@@ -5,3 +5,8 @@ scipy==1.18.0
 numpy==2.5.2
 joblib==1.5.2
 pytest==8.4.2
+
+# Só o encoder dos sinais usa torch (libras/encoder.py e training/train_sinais.py).
+# O alfabeto e a baseline DTW rodam sem ele: se o import falhar, o app cai na
+# busca por DTW e avisa.
+torch==2.13.0

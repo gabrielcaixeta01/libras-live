@@ -32,6 +32,12 @@ from . import pose
 T_PADRAO = 32  # frames por sinal depois da reamostragem; ~1s a 30fps
 MINIMO_PARA_SPLINE = 4  # abaixo disso a cúbica não tem apoio e vira linear
 
+# Em larguras de ombro: um braço aberto chega a ~1,5 e a mão mais distante que o
+# corpo alcança fica perto de 2. Valor acima disto não é gesto, é imputação ruim
+# — e o dicionário tem amostras chegando a ±400. Cortar aí não perde gesto
+# nenhum e evita que um ponto inventado domine a distância ou a rede.
+LIMITE_PLAUSIVEL = 5.0
+
 
 @dataclass(frozen=True)
 class Sequencia:
@@ -135,6 +141,82 @@ def reamostrar(sequencia: np.ndarray, t_alvo: int) -> np.ndarray:
         axis=1,
     )
     return saida.reshape(t_alvo, *sequencia.shape[1:]).astype(np.float32)
+
+
+def velocidade(vetores: np.ndarray) -> np.ndarray:
+    """(..., T, D) → (..., T, D): quanto cada coordenada andou desde o frame anterior.
+
+    O primeiro frame vem zerado, e não descartado: o resultado tem que continuar
+    alinhado com a posição frame a frame para que os dois possam ser
+    concatenados como canais da mesma sequência.
+
+    Duas coisas diferentes em Libras podem ter a mesma posição média e
+    trajetórias opostas — a posição diz *onde*, a velocidade diz *para onde*.
+    """
+    v = np.asarray(vetores, dtype=np.float32)
+    if v.ndim < 2:
+        raise ValueError(f"esperado (T, D) ou (N, T, D), recebido {v.shape}")
+    return np.diff(v, axis=-2, prepend=v[..., :1, :])
+
+
+def normalizar_z(vetores: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """z-score de cada canal ao longo do tempo, por gravação.
+
+    Tira de cada coordenada a sua própria média e o seu próprio desvio dentro
+    daquela gravação, o que absorve diferenças de proporção corporal e de
+    enquadramento entre pessoas. Medido sobre o DTW, é o único ganho barato que
+    apareceu: recall@5 de 16,4% para 19,5% num vocabulário de 250.
+
+    **O preço é alto e por isso isto não é o padrão.** Centrar cada canal apaga
+    a *localização absoluta* do gesto, e em Libras localização é fonema — PAI e
+    MÃE têm a mesma configuração de mão em lugares diferentes do rosto. Para o
+    DTW, que não tem como aprender a compensar articulador, a troca valeu. Para
+    o encoder, que é treinado exatamente para isso, jogar a informação fora é
+    pagar duas vezes — e está medido: **10,3% de recall@5 sem, 7,1% com**, no
+    mesmo leave-one-articulator-out. Com ela o encoder perde até para o DTW.
+
+    Canal constante — a mão que não apareceu em nenhum frame — sai zerado, e não
+    dividido por quase-zero.
+    """
+    v = np.asarray(vetores, dtype=np.float32)
+    if v.ndim < 2:
+        raise ValueError(f"esperado (T, D) ou (N, T, D), recebido {v.shape}")
+
+    media = v.mean(axis=-2, keepdims=True)
+    desvio = v.std(axis=-2, keepdims=True)
+    return np.where(desvio > eps, (v - media) / np.maximum(desvio, eps), 0.0).astype(
+        np.float32
+    )
+
+
+def caracteristicas(
+    vetores: np.ndarray,
+    com_velocidade: bool = True,
+    z: bool = False,
+    limite: float = LIMITE_PLAUSIVEL,
+) -> np.ndarray:
+    """(..., T, 147) → (..., T, 147 ou 294): o que entra no encoder.
+
+    Sempre limita a amplitude primeiro, porque tudo o que vem depois — a
+    velocidade, o z-score, a rede — é sensível a um ponto inventado a 400
+    larguras de ombro do corpo.
+
+    Args:
+        vetores: sequência já normalizada no corpo, de `Sequencia.vetores`.
+        com_velocidade: concatena a derivada temporal como canais extras.
+        z: aplica `normalizar_z` na posição. Ver lá o que isso custa.
+        limite: amplitude máxima aceita, em larguras de ombro.
+    """
+    v = np.clip(np.asarray(vetores, dtype=np.float32), -limite, limite)
+    if z:
+        v = normalizar_z(v)
+
+    if not com_velocidade:
+        return v
+
+    return np.concatenate(
+        [v, np.clip(velocidade(v), -limite, limite)], axis=-1, dtype=np.float32
+    )
 
 
 def preparar(

@@ -136,6 +136,12 @@ Para que a troca seja barata, `Dicionario` recebe a métrica por parâmetro:
 
 O app não sabe a diferença.
 
+> **Correção de 12/08/2026, depois de construir o encoder.** A troca saiu barata
+> como previsto — `Dicionario` não mudou —, mas "torch só no treino" estava
+> errado: o app precisa do modelo para codificar a *consulta*, então torch entra
+> em runtime também. Sem ele, `app_sinais.carregar_busca` avisa e volta para o
+> DTW. Resultado medido em `models/relatorio_encoder.txt`.
+
 ### Custo do DTW
 
 DTW ingênuo em 4.092 candidatos seria lento em Python. A implementação

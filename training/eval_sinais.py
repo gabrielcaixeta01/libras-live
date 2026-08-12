@@ -44,6 +44,22 @@ def montar_relatorio(
         rotulo = "TOTAL" if fonte == "total" else f"sem {fonte}"
         linhas.append(f"  {rotulo:<16s} {metricas}")
     total = resultados["total"]
+    if dicionario.metrica != "dtw":
+        linhas += [
+            "",
+            "-" * 72,
+            "ATENÇÃO",
+            "-" * 72,
+            "",
+            "Este dicionário não é de sequências, então as representações saíram de",
+            "um encoder — e o encoder salvo por train_sinais.py foi treinado com os",
+            "**três** articuladores. Rodar leave-one-articulator-out sobre ele deixa",
+            "o articulador de teste dentro do treino e mede memorização de pessoa,",
+            "que é exatamente o erro do L↔G da fase 1.",
+            "",
+            "O número honesto do encoder é o de models/relatorio_encoder.txt, onde",
+            "cada rodízio tem o seu próprio treino.",
+        ]
     linhas += [
         "",
         "-" * 72,

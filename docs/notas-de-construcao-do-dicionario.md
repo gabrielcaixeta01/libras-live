@@ -181,33 +181,107 @@ multiplicar por quatro.
 
 ---
 
+## O encoder, e o que ele comprou
+
+Escrito em 12 de agosto de 2026, um dia depois do resto desta página. O plano da
+seção anterior foi executado como estava documentado: GRU bidirecional 2×256
+sobre as sequências de 32×147, embedding de 256d, ArcFace sobre o vocabulário —
+1.163 classes e ~2.320 gravações em cada rodízio, 1.363 classes e 4.086 gravações
+no modelo final —, treinado nos protótipos já extraídos: **nenhum vídeo
+reprocessado**.
+
+```
+leave-one-articulator-out, 4.086 consultas, três encoders (um por rodízio)
+recall@5  10,3%     recall@1  3,8%     MRR  6,1%     ← encoder
+recall@5   7,5%     recall@1  2,9%     MRR  4,4%     ← baseline DTW
+```
+
+**1,4x.** O alvo era bater 7,5% e ele foi batido. A margem que justificaria o
+torch sozinho — 1,5x, escrita no `train_sinais.py` antes de rodar — não foi
+alcançada. Aprender a distância foi na direção certa e parou perto: o objetivo de
+treino era o diagnóstico correto, e não era o gargalo maior.
+
+O gargalo maior é o mesmo desde o começo: **duas gravações por classe em cada
+rodízio**. Nenhuma arquitetura resolve few-shot com o objetivo já certo.
+
+### O que o vocabulário aberto respondeu
+
+Duzentos sinais ficaram fora do treino do encoder e entraram só como protótipo:
+**12,3% de recall@5**, contra 10,3% do vocabulário inteiro.
+
+Sinal que o encoder nunca viu se comporta tão bem quanto — melhor que — sinal que
+ele treinou. Isso diz duas coisas. A boa: a promessa "adiciono um sinal novo com
+uma gravação e ele passa a ser encontrável" se sustenta, e a re-ancoragem não é
+conversa. A menos boa: o encoder não está extraindo das classes vistas quase nada
+que não generalize também para as não vistas — ele aprendeu uma representação
+genérica de gesto, não as 1.363 palavras.
+
+### A z-normalização não atravessou
+
+Era o barato que a seção anterior recomendava: +3,8 pontos sobre o DTW num
+vocabulário de 250. Sobre o encoder ela **piora**, e não por pouco:
+
+| entrada | rodízio 1 | rodízio 2 | rodízio 3 | total |
+|---|---|---|---|---|
+| posição + velocidade | 12,8% | 8,2% | 9,9% | **10,3%** |
+| z(posição) + velocidade | 7,2% | 7,4% | 6,8% | 7,1% |
+
+Sete e um décimo é *abaixo* da baseline DTW. O mesmo pré-processamento que dava o
+melhor resultado com DTW faz o encoder perder para o DTW.
+
+O motivo estava escrito antes de medir, e medir confirmou: z-normalizar por canal
+tira de cada coordenada a sua própria média ao longo do tempo, e isso apaga a
+**localização absoluta** do gesto. Localização é fonema em Libras — PAI e MÃE são
+a mesma configuração de mão em lugares diferentes do rosto. O DTW não tinha como
+aprender a compensar articulador, então trocar localização por robustez valia. O
+encoder é treinado exatamente para compensar articulador, e começar jogando fora
+a informação é pagar duas vezes.
+
+**Lição:** um ganho medido sobre uma representação não é um ganho da tarefa. Ele
+vale para o método que o mediu, e a razão de ele existir é o que decide se
+atravessa.
+
+A flag `--z` continua no `train_sinais.py`, agora com número ao lado dela.
+
+### O que ficou de fora, e por quê
+
+**A máscara de validade.** Era o segundo barato recomendado, e é o único item do
+plano que não foi executado. Ela é calculada, viaja em `Sequencia.validade` e é
+descartada por `vetores` — hoje um ponto imputado por spline entra na distância
+como se tivesse sido medido pela câmera.
+
+Usá-la não é uma linha: os protótipos são guardados como `(N, 32, 147)` em
+`dicionario.npz` e a máscara não cabe ali. Seria preciso mudar o formato do
+dicionário e **re-extrair os 4.086 vídeos** — 55 minutos. Não entrou porque a
+fase existia para responder se o encoder paga o torch, e a resposta não dependia
+disso. Fica como a próxima melhoria de representação, e agora com o custo
+explícito.
+
+### A armadilha que apareceu no caminho
+
+Depois do treino há dois npz parecidos em `data/sinais/`: `dicionario.npz` com
+sequências e `dicionario_embeddings.npz` com embeddings. Apontar o
+`eval_sinais.py` para o segundo **roda sem erro** e imprime um número alto — o
+encoder salvo é o que viu os três articuladores, então o rodízio deixa de separar
+pessoas e o placar volta a medir memorização.
+
+É o L↔G com roupa nova, e pela terceira vez a forma dele é a mesma: nada falha,
+tudo passa, o número sai bonito. O `eval_sinais.py` agora detecta a métrica e
+escreve o aviso no próprio relatório.
+
+---
+
 ## O que vem depois
 
-**Encoder neural com metric learning — aprovado, agendado.**
+**Mais gravações por sinal.** É o que o encoder mediu, não o que ele supôs: com o
+objetivo de treino correto e a representação aprendida, o teto de 10,3% é o teto
+de três exemplos por classe. As duas saídas são outra base de Libras isolada
+somada ao V-LIBRASIL, ou a re-ancoragem em escala — as gravações que a própria
+pessoa faz no uso já são protótipos e já entram sem retreino.
 
-É a conclusão que esta fase existia para produzir, e o `eval_sinais.py` já a
-escreve sozinho quando o recall@5 fica abaixo de 80%. Fica agendado em vez de
-improvisado porque torch é a maior mudança de dependência do projeto e merece
-entrar por decisão, não por impulso de quem estava com o terminal aberto.
+**Depois dela, a máscara de validade** (acima, com o custo).
 
-Quando for a hora:
-
-- **Alvo:** bater 7,5% de recall@5 no mesmo leave-one-articulator-out. Sem esse
-  protocolo, qualquer número novo é incomparável com este.
-- **Entrada:** os 4.086 protótipos de `data/sinais/dicionario.npz`, já
-  extraídos — **não é preciso reprocessar os vídeos nem rebaixar os 10,8 GB.**
-  A extração custou 55 minutos e o resultado está salvo.
-- **Arquitetura:** GRU ou Transformer pequeno sobre as sequências de 32×147,
-  treinado com ArcFace ou triplet — o objetivo é aproximar o mesmo sinal feito
-  por pessoas diferentes, que é precisamente a razão 0,80 que precisa cair.
-- **Cuidado com o protocolo:** treinar com dois articuladores e validar no
-  terceiro, girando. Treinar com os três e avaliar depois reproduziria o erro do
-  L↔G num lugar novo.
-- **Baratos que valem junto:** a z-normalização acima (+3,8 pontos sozinha) e
-  usar a **máscara de validade**, que hoje é calculada, carregada em
-  `Sequencia.validade` e descartada por `vetores` — pontos imputados entram na
-  distância como se tivessem sido medidos.
-
-Até lá o modo `--sinais` continua servindo como demonstração do pipeline e como
+Enquanto isso o modo `--sinais` serve como demonstração do pipeline e como
 ferramenta pessoal: a re-ancoragem (`1`–`5`) contorna o problema para a sua
-própria mão, que é o caso de uso que funciona hoje.
+própria mão, que é o caso de uso que funciona hoje — e agora ela contorna sobre
+uma representação 1,4x melhor.

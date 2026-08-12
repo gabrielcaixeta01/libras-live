@@ -154,3 +154,83 @@ def test_espelhar_troca_tambem_a_mascara_de_validade():
     s = sequencia.preparar(seq, espelhar=True)
     assert s.validade[:, pose.MAO_DIREITA].max() == 0.0
     assert s.validade[:, pose.MAO_ESQUERDA].min() == 1.0
+
+
+# --- características: o que entra no encoder ---
+
+
+def test_velocidade_zera_o_primeiro_frame_e_mede_o_resto():
+    """Zerado e não descartado: posição e velocidade têm que continuar alinhadas
+    frame a frame para poderem ser canais da mesma sequência."""
+    seq = np.array([[0.0, 0.0], [1.0, 2.0], [1.0, 5.0]], dtype=np.float32)
+
+    v = sequencia.velocidade(seq)
+
+    assert v.shape == seq.shape
+    assert np.allclose(v[0], 0.0)
+    assert np.allclose(v[1], [1.0, 2.0])
+    assert np.allclose(v[2], [0.0, 3.0])
+
+
+def test_velocidade_aceita_lote():
+    assert sequencia.velocidade(np.zeros((4, 8, 3), dtype=np.float32)).shape == (4, 8, 3)
+
+
+def test_z_normaliza_por_canal_ao_longo_do_tempo():
+    seq = np.stack([np.arange(10.0), 100.0 + 3.0 * np.arange(10.0)], axis=1)
+
+    z = sequencia.normalizar_z(seq)
+
+    assert np.allclose(z.mean(axis=0), 0.0, atol=1e-5)
+    assert np.allclose(z.std(axis=0), 1.0, atol=1e-5)
+    # Dois canais que só diferem por escala e deslocamento saem idênticos — é
+    # exatamente a diferença entre pessoas que o z-score existe para absorver.
+    assert np.allclose(z[:, 0], z[:, 1], atol=1e-5)
+
+
+def test_z_de_canal_constante_e_zero_e_nao_infinito():
+    """A mão que não apareceu em frame nenhum é constante. Dividir pelo desvio
+    dela mandaria a sequência inteira para NaN."""
+    z = sequencia.normalizar_z(np.zeros((8, 4), dtype=np.float32))
+
+    assert np.isfinite(z).all()
+    assert np.allclose(z, 0.0)
+
+
+def test_caracteristicas_dobra_os_canais_com_a_velocidade():
+    seq = np.zeros((sequencia.T_PADRAO, pose.TAMANHO_VETOR), dtype=np.float32)
+
+    assert sequencia.caracteristicas(seq).shape == (32, 2 * pose.TAMANHO_VETOR)
+    assert sequencia.caracteristicas(seq, com_velocidade=False).shape == (32, 147)
+
+
+def test_caracteristicas_corta_o_ponto_implausivel():
+    """O dicionário tem amostras chegando a ±400 larguras de ombro — imputação
+    ruim, não gesto. Sem o corte, um ponto desses domina a rede inteira."""
+    seq = np.full((8, 147), 400.0, dtype=np.float32)
+
+    saida = sequencia.caracteristicas(seq)
+
+    assert saida.max() <= sequencia.LIMITE_PLAUSIVEL
+    assert saida.min() >= -sequencia.LIMITE_PLAUSIVEL
+
+
+def test_caracteristicas_preserva_a_localizacao_por_padrao():
+    """Localização é fonema em Libras: PAI e MÃE são a mesma mão em lugares
+    diferentes. O padrão não pode apagar isso — só o `z=True` apaga, e ele avisa."""
+    alto = np.full((8, 147), 0.5, dtype=np.float32)
+    baixo = np.full((8, 147), -0.5, dtype=np.float32)
+
+    assert not np.allclose(
+        sequencia.caracteristicas(alto), sequencia.caracteristicas(baixo)
+    )
+    assert np.allclose(
+        sequencia.caracteristicas(alto, z=True),
+        sequencia.caracteristicas(baixo, z=True),
+    )
+
+
+def test_caracteristicas_aceita_lote():
+    lote = np.zeros((5, 32, pose.TAMANHO_VETOR), dtype=np.float32)
+
+    assert sequencia.caracteristicas(lote).shape == (5, 32, 294)

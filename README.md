@@ -132,9 +132,9 @@ por mais longa que ela seja.
 
 `landmarks.normalizar`, `stabilizer`, `speller`, `sampling` e `practice` são
 **lógica pura**: numpy entra, numpy sai, nenhum relógio e nenhuma câmera lá
-dentro. O tempo entra sempre por parâmetro. É por isso que 273 testes rodam em
-meio segundo sem webcam e sem modelo treinado — e é por isso que a parte que
-pode dar errado é a parte que está testada.
+dentro. O tempo entra sempre por parâmetro. É por isso que 347 testes rodam em
+segundos sem webcam e sem modelo treinado — e é por isso que a parte que pode dar
+errado é a parte que está testada.
 
 `camera.py`, `mediapipe_io.py`, `desenho.py` e os dois `ui.py` são
 deliberadamente finos: uns leem frames e traduzem o que a biblioteca devolve, os
@@ -232,7 +232,8 @@ precisa do classificador do alfabeto, nem ele do dicionário.
 ```bash
 bash scripts/download_vlibrasil.sh                # ~10,8 GB, baixa e extrai
 python training/prepare_sinais.py --videos data/raw/v-librasil
-python training/eval_sinais.py                    # o placar honesto
+python training/eval_sinais.py                    # o placar da baseline DTW
+python training/train_sinais.py                   # o encoder neural (~15 min)
 python -m libras.app --sinais                     # usar
 ```
 
@@ -247,6 +248,11 @@ modelos do MediaPipe, então o teto é a RAM e não os núcleos.
 `--limite 50` processa só os primeiros vídeos, para testar o caminho antes de
 gastar o tempo todo. A extração também é retomável: interromper e rodar de novo
 continua de onde parou.
+
+O `train_sinais.py` **não reprocessa vídeo nenhum** — ele trabalha sobre os
+protótipos já extraídos. Quando ele termina, o app passa a usar o encoder sozinho;
+sem ele, continua na baseline DTW. `--limite-sinais 30 --epocas 3` ensaia o
+caminho inteiro em segundos.
 
 Detalhes em [Sinais: o dicionário reverso](#sinais-o-dicionário-reverso).
 
@@ -552,11 +558,15 @@ nova. O mesmo sinal feito devagar e feito rápido é a mesma palavra; uma distâ
 frame a frame diria que não.
 
 O passo seguinte natural seria um encoder neural com metric learning. Mas ele
-traz **torch** para um projeto que hoje é scikit-learn puro com modelo de menos
-de 1MB — a maior mudança de dependência da história do repo. Antes de pagar essa
+traz **torch** para um projeto que era scikit-learn puro com modelo de menos de
+1MB — a maior mudança de dependência da história do repo. Antes de pagar essa
 conta é preciso saber quanto ela compra, e a baseline é quem produz esse número.
 **Se o encoder não bater o DTW por margem clara em leave-one-articulator-out, o
 torch não entra.** A decisão fica escrita em `models/relatorio_sinais.txt`.
+
+O encoder foi construído e medido depois disso — ele bate a baseline, e não por
+margem clara. O número e a leitura estão em
+[O encoder neural, e o que ele comprou](#o-encoder-neural-e-o-que-ele-comprou).
 
 Para que a troca seja barata, a métrica entra por parâmetro no dicionário:
 sequência (32, 147) com DTW hoje, embedding (256,) com cosseno depois. O app não
@@ -602,8 +612,8 @@ Seus protótipos ficam em `data/sinais/meus_prototipos.npz`, separados do
 dicionário base, que nunca é reescrito. É a mesma lição da fase 1 — a sua mão é
 a âncora — resolvida por arquitetura em vez de por mais uma sessão de coleta.
 
-**Estado: o dicionário está construído, e o número é ruim.** 4.086 vídeos
-extraídos, 1.363 sinais, e o placar honesto:
+**Estado: o dicionário está construído, e o número da baseline é ruim.** 4.086
+vídeos extraídos, 1.363 sinais, e o placar honesto do DTW:
 
 ```
 leave-one-articulator-out, 4.086 consultas
@@ -637,12 +647,68 @@ Vocabulário menor não salva — a fraqueza é uniforme em toda escala:
 
 Engenharia de feature sobre DTW também não: z-normalizar as sequências leva o
 recall@5 de 16,4% para 20,2% num vocabulário de 250 — ganho real, longe de
-suficiente.
+suficiente. (E que **não atravessa** para o encoder: lá a mesma z-normalização
+derruba 10,3% para 7,1%. Um ganho medido sobre uma representação não é um ganho
+da tarefa.)
 
 É aqui, e só aqui, que o **encoder neural com metric learning** se justifica:
-ele tem 7,5% para bater, medido no mesmo protocolo. Até ele existir, o modo
-`--sinais` funciona como demonstração do pipeline e como ferramenta pessoal via
-re-ancoragem (`1`–`5`), que contorna o problema para a sua própria mão.
+ele tem 7,5% para bater, medido no mesmo protocolo.
+
+### O encoder neural, e o que ele comprou
+
+[`libras/encoder.py`](libras/encoder.py) e
+[`training/train_sinais.py`](training/train_sinais.py). GRU bidirecional 2×256
+sobre as sequências de 32×147, embedding de **256d** na esfera unitária, treinado
+com **ArcFace** sobre as 1.363 classes. Entram os mesmos 4.086 protótipos já
+extraídos — **nenhum vídeo foi reprocessado**.
+
+```
+leave-one-articulator-out, 4.086 consultas, três encoders (um por rodízio)
+recall@5  10,3%     recall@1  3,8%     MRR  6,1%
+```
+
+| | DTW | encoder |
+|---|---|---|
+| recall@5 | 7,5% | **10,3%** |
+| recall@1 | 2,9% | 3,8% |
+| MRR | 4,4% | 6,1% |
+
+**1,4x a baseline.** Ganho real, medido no mesmo protocolo, com o mesmo dado e a
+mesma busca — e abaixo do que justificaria o torch sozinho. Aprender a distância
+foi na direção certa e não foi longe o bastante: com três gravações por sinal, o
+que falta não é objetivo, é dado. O relatório completo, com o veredito, fica em
+`models/relatorio_encoder.txt`.
+
+**Vocabulário aberto: 12,3% de recall@5** em 200 sinais que o encoder nunca viu
+no treino e que entram no índice só como protótipo. É *acima* do vocabulário
+inteiro, e isso diz uma coisa importante: o ganho não vem de decorar as classes
+vistas. A promessa "adiciono um sinal novo com uma gravação e ele passa a ser
+encontrável" se sustenta — no patamar atual, que ainda não é o de um dicionário
+utilizável.
+
+Três decisões, e o porquê de cada uma:
+
+| decisão | alternativa | por quê |
+|---|---|---|
+| GRU | Transformer | 32 frames e 2 exemplos por classe: atenção não tem onde brilhar, e a recorrência já traz "isto é trajetória" de graça |
+| ArcFace | triplet | triplet precisa de mineração de negativos difíceis, que é frágil com 2 exemplos por classe |
+| posição + velocidade | posição z-normalizada | medido: 10,3% contra **7,1%**. Centrar cada canal apaga a **localização**, que é fonema em Libras — PAI e MÃE são a mesma mão em lugares diferentes |
+
+O protocolo é o que custa: **três treinos, um por articulador de fora**, mais um
+quarto com os três para o modelo que o app usa. 9,1 min no total num M5 com MPS.
+Nenhuma época foi escolhida olhando o rodízio — não há early stopping, e o número
+é o da última época.
+
+Dois efeitos colaterais bem-vindos: a busca cai de **90 ms para 1,4 ms** (produto
+de matrizes contra 1.024 passos de programação dinâmica) e o dicionário em disco
+cai de **70 MB para 3 MB**. Nenhum dos dois era problema, e nenhum dos dois é
+argumento a favor do torch — só param de ser considerações.
+
+O app troca sozinho: quando `data/sinais/dicionario_embeddings.npz` existe, a
+representação passa a ser embedding e a métrica passa a ser cosseno. Sem ele,
+continua na baseline DTW. A re-ancoragem (`1`–`5`) funciona nos dois — os seus
+protótipos vão para um arquivo por métrica, porque um embedding não cabe no npz
+das sequências.
 
 ---
 
@@ -659,6 +725,7 @@ libras/
   sequencia.py     imputação por spline, reamostragem, validade
   segmenter.py     quando um sinal começa e quando acaba
   dtw.py           distância com alinhamento temporal, em lote
+  encoder.py       GRU bidirecional → embedding 256d (único lugar com torch)
   dicionario.py    protótipos, busca top-5, re-ancoragem
   avaliacao.py     recall@1/@5, MRR, leave-one-articulator-out
   catalogo.py      rótulo e articulador a partir do caminho do vídeo
@@ -687,14 +754,16 @@ training/
   collect.py           grava suas amostras pela webcam
   train.py             compara modelos, treina e salva o relatório
   prepare_sinais.py    extrai os vídeos do V-LIBRASIL
-  eval_sinais.py       leave-one-articulator-out
+  eval_sinais.py       leave-one-articulator-out da baseline DTW
+  train_sinais.py      treina o encoder e mede se ele paga o torch
 
-tests/            297 testes, espelhando a mesma divisão
+tests/            347 testes, espelhando a mesma divisão
 scripts/
   download_model.sh       modelos do MediaPipe (~17 MB)
   download_vlibrasil.sh   base de sinais do espelho no Kaggle (~10,8 GB)
   organizar_vlibrasil.py  layout plano do espelho → pasta por articulador
-models/           hand_landmarker.task, pose_landmarker.task, classifier.joblib
+models/           hand_landmarker.task, pose_landmarker.task, classifier.joblib,
+                  encoder_sinais.pt
 data/             dataset_publico.npz, coletados/*.npy, sinais/, raw/
 ```
 
@@ -739,6 +808,20 @@ Do modo sinais:
 | `CANDIDATOS_NA_TELA` | 5 | quantas palavras a busca devolve |
 | `BANDA_DTW` | 0,2 | desvio máximo da diagonal no alinhamento |
 
+Do encoder neural:
+
+| parâmetro | padrão | efeito |
+|---|---|---|
+| `DIMENSAO_EMBEDDING` | 256 | tamanho do vetor que substitui a sequência |
+| `ENC_OCULTO` / `ENC_CAMADAS` | 256 / 2 | unidades por direção da GRU, e profundidade |
+| `ENC_DROPOUT` | 0,3 | com 2 gravações por classe, sem isso ele decora |
+| `ENC_EPOCAS` | 60 | épocas por rodízio |
+| `ARCFACE_MARGEM` | 0,30 | folga angular exigida; sobe de 0 no primeiro terço |
+| `ARCFACE_ESCALA` | 32,0 | dureza do softmax sobre a esfera |
+| `ENC_AUG_*` | — | rotação, escala, ruído e deformação de ritmo do aumento |
+| `VOCABULARIO_ABERTO` | 200 | sinais fora do treino, medidos à parte |
+| `BASELINE_DTW_RECALL5` | 0,075 | o número que o encoder tem que bater |
+
 ---
 
 ## Testes
@@ -747,11 +830,19 @@ Do modo sinais:
 python -m pytest tests/ -q
 ```
 
-273 testes, menos de 1s, sem câmera, sem vídeo, sem dataset e sem modelo
-treinado. Cobrem normalização (das duas), estabilização, soletração, aumento de
-dados, recuperação de imagens, rejeição, diversidade da coleta, modo prática,
-imputação temporal, segmentação de sinais, DTW, busca no dicionário,
-re-ancoragem e as métricas de avaliação — toda a lógica que pode dar errado.
+347 testes, ~4s, sem câmera, sem vídeo, sem dataset e sem modelo treinado.
+Cobrem normalização (das duas), estabilização, soletração, aumento de dados,
+recuperação de imagens, rejeição, diversidade da coleta, modo prática, imputação
+temporal, segmentação de sinais, DTW, busca no dicionário, re-ancoragem, as
+métricas de avaliação, e o encoder — toda a lógica que pode dar errado.
+
+Os testes do encoder cobrem o que quebraria em silêncio: embedding sem norma 1
+faria o cosseno ordenar por tamanho em vez de forma; hiperparâmetros perdidos no
+`.pt` fariam a entrada ser montada de um jeito no treino e de outro no app; um
+aumento que espelhasse o sinalizante treinaria a rede no rótulo errado; e o
+vazamento do vocabulário aberto para dentro do treino daria um número bonito e
+mentiroso. Os que dependem de torch se pulam sozinhos quando ele não está
+instalado.
 
 O que não está testado é o que não dá para testar sem hardware: a captura da
 webcam, o desenho na tela e os dois wrappers do MediaPipe. Todos foram mantidos
@@ -780,11 +871,13 @@ N antes da cascata de recuperação.
 modelo tem todo incentivo para aprender as pessoas. O leave-one-articulator-out
 mede isso e a re-ancoragem corrige no uso — mas a base é essa.
 
-**recall@5 de 7,5%.** Medido, não estimado: 4.086 consultas em
-leave-one-articulator-out. A busca está correta (auto-recuperação 6/6) e os
-vetores são sadios — o que falha é a representação generalizar entre pessoas.
-Não é um dicionário utilizável ainda, e o encoder neural existe no roteiro
-exatamente por isso.
+**recall@5 de 10,3% com o encoder, 7,5% com o DTW.** Medido, não estimado: 4.086
+consultas em leave-one-articulator-out. A busca está correta (auto-recuperação
+6/6) e os vetores são sadios — o que falha é a representação generalizar entre
+pessoas, e aprender a distância melhorou isso em 1,4x sem resolver. **Não é um
+dicionário utilizável ainda.** Com três gravações por sinal, o gargalo que resta
+é dado e não objetivo — e a re-ancoragem é o que torna o modo `--sinais` útil
+hoje, para a sua própria mão.
 
 **Sem expressão facial.** É fonema em Libras, e sinais que só diferem por ela
 vão colidir. 468 pontos de rosto sobre três amostras por classe seria ruído
@@ -799,23 +892,31 @@ segmentação de frases contínuas.
 
 ~~1. Construir e medir o dicionário de sinais.~~ **Feito.** 4.086 vídeos
 extraídos, recall@5 de 7,5% registrado em `models/relatorio_sinais.txt`. Era o
-número do qual tudo abaixo dependia, e ele decidiu o item 1 atual.
+número do qual tudo abaixo dependia.
+
+~~2. Encoder neural com metric learning.~~ **Feito.** 10,3% de recall@5 no mesmo
+leave-one-articulator-out, registrado em `models/relatorio_encoder.txt`. Bateu a
+baseline por 1,4x, e é esse resultado que aponta para o item 1 atual: o que falta
+não é objetivo de treino, é dado.
 
 Em ordem de valor:
 
-1. **Encoder neural para os sinais — aprovado, adiado.** A baseline DTW mede
-   7,5% de recall@5 e não sustenta o produto; a decisão que `relatorio_sinais.txt`
-   existia para registrar está registrada. GRU ou Transformer pequeno com
-   ArcFace, treinado sobre os mesmos 4.086 protótipos já extraídos e avaliado no
-   mesmo leave-one-articulator-out — **tem 7,5% para bater**. É a maior mudança
-   de dependência do projeto (torch), e por isso está agendada e não improvisada.
-   O plano está em [Notas de construção do dicionário](docs/notas-de-construcao-do-dicionario.md#o-que-vem-depois).
-2. **Conjunto de avaliação separado do alfabeto.** Uma sessão de gravação em
+1. **Mais de três gravações por sinal — o gargalo é aqui.** O encoder tinha duas
+   por classe em cada rodízio e melhorou 1,4x; nenhuma arquitetura resolve
+   few-shot com o objetivo já correto. Duas saídas: outra base de Libras isolada
+   somada ao V-LIBRASIL, ou re-ancoragem em escala — as gravações que a própria
+   pessoa faz no uso já são protótipos e já entram sem retreino.
+2. **A máscara de validade na representação.** Ela é calculada, viaja em
+   `Sequencia.validade` e é **descartada** por `vetores` — hoje um ponto imputado
+   entra na distância como se tivesse sido medido. Usá-la exige guardar a máscara
+   junto dos protótipos, o que muda o formato do `dicionario.npz` e custa uma
+   re-extração de 55 min. É a última melhoria barata que sobrou na representação.
+3. **Conjunto de avaliação separado do alfabeto.** Uma sessão de gravação em
    outro dia, outra luz, outra roupa, usada só como teste. É o que transforma
    "achei que melhorou" em evidência.
-3. **Features geométricas no alfabeto** — ângulos entre dedos e distâncias
+4. **Features geométricas no alfabeto** — ângulos entre dedos e distâncias
    ponta-a-ponta somados às coordenadas cruas, mirando U/V e B/W.
-4. **Autocorreção com dicionário PT-BR** — um erro em dez letras arruína a
+5. **Autocorreção com dicionário PT-BR** — um erro em dez letras arruína a
    palavra inteira; a palavra em andamento já aparece destacada.
 
 ---
@@ -830,7 +931,8 @@ Em ordem de valor:
   — o que quebrou entre "o pipeline está pronto" e um recall@5 medido: o site da
   UFPE fora do ar, o `unzip` que corrompe UTF-8, o layout que destruiria a
   avaliação em silêncio, e o bug que eu inventei medindo com média em vez de
-  mediana. Traz também o plano do encoder.
+  mediana. Traz também o que o encoder comprou, o barato que não atravessou do
+  DTW para ele, e a armadilha de apontar a avaliação para o npz errado.
 
 ---
 
@@ -851,6 +953,10 @@ Trabalhos que embasaram decisões da fase 2:
   — o subconjunto de landmarks e a imputação por spline.
 - [Representing Signs as Signs: One-Shot ISLR](https://arxiv.org/abs/2502.20171)
   — busca vetorial em vocabulário grande, e a referência de 50,8% de MRR.
+- [ArcFace: Additive Angular Margin Loss](https://arxiv.org/abs/1801.07698)
+  — a perda do encoder, e a razão de ela existir: margem angular em vez de
+  fronteira justa.
 
 Dependências: `mediapipe`, `opencv-python`, `scikit-learn`, `scipy`, `numpy`,
-`joblib`, `pytest`. Versões exatas em [`requirements.txt`](requirements.txt).
+`joblib`, `pytest` e `torch` — este último só para o encoder dos sinais. Versões
+exatas em [`requirements.txt`](requirements.txt).

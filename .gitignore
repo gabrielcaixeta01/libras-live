@@ -13,6 +13,9 @@ models/pose_landmarker.task
 # Classificador treinado — regerado por training/train.py, muda a cada treino
 models/classifier.joblib
 
+# Encoder dos sinais — regerado por training/train_sinais.py
+models/encoder_sinais.pt
+
 .DS_Store
 .idea/
 .vscode/

@@ -90,3 +90,90 @@ def test_ida_e_volta_preserva_os_vetores(caminhos):
 
     salvo = Dicionario.carregar(meus)
     assert np.allclose(salvo.buscar(prototipo(0.42), k=1)[0].similaridade, 1.0, atol=0.2)
+
+
+# --- qual busca o app escolhe ---
+#
+# O encoder entra sem que o loop saiba: quando o dicionário de embeddings existe,
+# a representação passa a ser um vetor de 256d e a métrica passa a ser cosseno.
+# O que não pode acontecer é os dois se misturarem — um embedding gravado no npz
+# das sequências daria um dicionário que carrega e erra tudo.
+
+
+def gravacao_pronta() -> sequencia.Sequencia:
+    pontos = np.zeros((sequencia.T_PADRAO, 49, 3), dtype=np.float32)
+    return sequencia.Sequencia(pontos=pontos, validade=np.ones((sequencia.T_PADRAO, 49)))
+
+
+@pytest.fixture
+def caminhos_encoder(caminhos, tmp_path, monkeypatch):
+    """Os quatro arquivos do caminho do encoder, todos fora do repo."""
+    alvos = {
+        "DICIONARIO_EMBEDDINGS": tmp_path / "embeddings.npz",
+        "PROTOTIPOS_USUARIO_EMBEDDINGS": tmp_path / "meus_embeddings.npz",
+        "ENCODER_SINAIS": tmp_path / "encoder.pt",
+    }
+    for nome, caminho in alvos.items():
+        monkeypatch.setattr(app_sinais.config, nome, caminho)
+    return alvos
+
+
+def test_sem_encoder_o_app_usa_a_baseline_dtw(caminhos, caminhos_encoder):
+    base, _ = caminhos
+    dicionario_base().salvar(base)
+
+    busca = app_sinais.carregar_busca()
+
+    assert busca.dicionario.metrica == "dtw"
+    assert busca.prototipos == app_sinais.config.PROTOTIPOS_USUARIO
+    assert busca.representar(gravacao_pronta()).shape == (sequencia.T_PADRAO, 147)
+
+
+def test_com_encoder_a_consulta_vira_embedding(caminhos, caminhos_encoder):
+    encoder = pytest.importorskip("libras.encoder")
+
+    modelo = encoder.Codificador(
+        encoder.Hiperparametros(dimensao=16, oculto=8, camadas=1, dropout=0.0)
+    )
+    encoder.salvar(modelo, caminhos_encoder["ENCODER_SINAIS"])
+    Dicionario(
+        representacoes=np.zeros((2, 16), dtype=np.float32),
+        rotulos=["CASA", "ÁGUA"],
+        fontes=["articulador_1", "articulador_2"],
+        metrica="cosseno",
+    ).salvar(caminhos_encoder["DICIONARIO_EMBEDDINGS"])
+
+    busca = app_sinais.carregar_busca()
+
+    assert busca.dicionario.metrica == "cosseno"
+    assert busca.prototipos == caminhos_encoder["PROTOTIPOS_USUARIO_EMBEDDINGS"]
+    assert busca.representar(gravacao_pronta()).shape == (16,)
+
+
+def test_embeddings_sem_modelo_diz_o_que_rodar(caminhos, caminhos_encoder):
+    pytest.importorskip("libras.encoder")
+    Dicionario(
+        representacoes=np.zeros((1, 16), dtype=np.float32),
+        rotulos=["CASA"],
+        fontes=["articulador_1"],
+        metrica="cosseno",
+    ).salvar(caminhos_encoder["DICIONARIO_EMBEDDINGS"])
+
+    with pytest.raises(FileNotFoundError, match="train_sinais"):
+        app_sinais.carregar_busca()
+
+
+def test_prototipos_de_embedding_nao_caem_no_npz_das_sequencias(
+    caminhos, caminhos_encoder
+):
+    dicionario = Dicionario(
+        representacoes=np.zeros((1, 16), dtype=np.float32),
+        rotulos=["CASA"],
+        fontes=["articulador_1"],
+        metrica="cosseno",
+    )
+    dicionario.ancorar(np.full(16, 0.5, dtype=np.float32), "LIVRO")
+
+    assert app_sinais.salvar_prototipos(dicionario) == 1
+    assert caminhos_encoder["PROTOTIPOS_USUARIO_EMBEDDINGS"].exists()
+    assert not app_sinais.config.PROTOTIPOS_USUARIO.exists()

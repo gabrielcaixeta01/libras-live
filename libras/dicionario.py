@@ -185,6 +185,21 @@ class Dicionario:
     def rotulos(self) -> list[str]:
         return list(self._rotulos)
 
+    @property
+    def representacoes(self) -> np.ndarray:
+        """As representações na ordem em que entraram. Para leitura.
+
+        Existe para quem treina em cima dos protótipos — o encoder aprende
+        exatamente sobre este array — e não para o caminho da busca, que usa
+        `buscar`.
+        """
+        return self._representacoes
+
+    @property
+    def procedencias(self) -> list[str]:
+        """A fonte de **cada** protótipo, na ordem. `fontes` é o conjunto delas."""
+        return list(self._fontes)
+
     def separar_fonte(self, fonte: str) -> tuple["Dicionario", list[tuple]]:
         """Divide em (dicionário sem a fonte, consultas daquela fonte).
 
