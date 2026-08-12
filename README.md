@@ -230,19 +230,23 @@ O dicionário de sinais tem a sua própria base e o seu próprio pipeline — n�
 precisa do classificador do alfabeto, nem ele do dicionário.
 
 ```bash
-# 1. baixe o V-LIBRASIL em https://libras.cin.ufpe.br (~10,5 GB) e extraia
-#    mantendo uma pasta por articulador:
-#      data/raw/v-librasil/articulador_1/casa.mp4
-#      data/raw/v-librasil/articulador_2/casa.mp4
-
-python training/prepare_sinais.py --videos data/raw/v-librasil   # 2-5h de CPU
-python training/eval_sinais.py                                   # o placar honesto
-python -m libras.app --sinais                                    # usar
+bash scripts/download_vlibrasil.sh                # ~10,8 GB, baixa e extrai
+python training/prepare_sinais.py --videos data/raw/v-librasil
+python training/eval_sinais.py                    # o placar honesto
+python -m libras.app --sinais                     # usar
 ```
 
+O script baixa do **espelho no Kaggle**, que serve o bundle sem exigir login. O
+site oficial (`libras.cin.ufpe.br`) responde 502 desde antes desta escrita — o
+proxy da UFPE está de pé, o backend não. O download é retomável.
+
+A extração roda em 8 processos por padrão (`--jobs`), o que a traz de 2-5 horas
+para a casa da meia hora num laptop de 10 núcleos. Cada worker carrega os dois
+modelos do MediaPipe, então o teto é a RAM e não os núcleos.
+
 `--limite 50` processa só os primeiros vídeos, para testar o caminho antes de
-gastar horas. A extração é retomável: interromper e rodar de novo continua de
-onde parou.
+gastar o tempo todo. A extração também é retomável: interromper e rodar de novo
+continua de onde parou.
 
 Detalhes em [Sinais: o dicionário reverso](#sinais-o-dicionário-reverso).
 
@@ -516,20 +520,26 @@ SOTA em Libras isolada com 5x menos tempo justamente por selecionar landmarks.
 
 ### Os dados, e a restrição que eles impõem
 
-[V-LIBRASIL](https://libras.cin.ufpe.br) (UFPE/CIn): **1.364 sinais, 4.089
-vídeos, ~10,5 GB**. O número que decide o desenho inteiro:
+[V-LIBRASIL](https://libras.cin.ufpe.br) (UFPE/CIn): **1.364 sinais, 4.086
+vídeos aproveitáveis, ~10,8 GB**. O número que decide o desenho inteiro:
 
 ```
-4.089 vídeos ÷ 1.364 sinais = 3 gravações por sinal — uma por articulador
+4.086 vídeos ÷ 1.364 sinais = 3 gravações por sinal — uma por articulador
 ```
+
+São 4.089 gravações no catálogo original, mas três (`Congelar_Articulador3`,
+`Criança_Articulador3`, `Poesia_Articulador2`) estão corrompidas na origem —
+vêm com largura, altura e fps zerados, e o próprio dataset as lista em
+`error.csv`. O espelho já as exclui.
 
 Três exemplos por classe não é "dataset pequeno", é **few-shot por definição**.
 Um classificador de 1.364 saídas decoraria os articuladores. Daí a arquitetura
 ser **representação + busca vetorial**, não classificação.
 
 ```bash
-python training/prepare_sinais.py --videos data/raw/v-librasil   # 2-5h de CPU
-python training/eval_sinais.py                                   # o placar honesto
+bash scripts/download_vlibrasil.sh                # espelho do Kaggle
+python training/prepare_sinais.py --videos data/raw/v-librasil
+python training/eval_sinais.py                    # o placar honesto
 ```
 
 A extração é retomável e nenhum frame é gravado — cada vídeo vira 32×147 números
@@ -592,10 +602,47 @@ Seus protótipos ficam em `data/sinais/meus_prototipos.npz`, separados do
 dicionário base, que nunca é reescrito. É a mesma lição da fase 1 — a sua mão é
 a âncora — resolvida por arquitetura em vez de por mais uma sessão de coleta.
 
-**Estado:** o pipeline está completo e testado ponta a ponta, mas o dicionário
-ainda não foi construído — depende de baixar os 10,5 GB do V-LIBRASIL. Não há
-número de recall@5 aqui ainda, e não vai haver até `eval_sinais.py` rodar sobre
-dados de verdade.
+**Estado: o dicionário está construído, e o número é ruim.** 4.086 vídeos
+extraídos, 1.363 sinais, e o placar honesto:
+
+```
+leave-one-articulator-out, 4.086 consultas
+recall@5  7,5%      recall@1  2,9%      MRR  4,4%
+```
+
+Acaso é 0,4%, então a busca aprendeu alguma coisa — mas 7,5% não é um
+dicionário que serve. **A baseline DTW não sustenta o produto**, que é
+exatamente a pergunta que esta fase existia para responder.
+
+O número não é bug. O que foi verificado antes de aceitá-lo:
+
+| verificação | resultado |
+|---|---|
+| auto-recuperação (consulta = protótipo do índice) | 6/6, similaridade ~1,000 |
+| vetores degenerados (NaN, Inf, constantes) | nenhum |
+| distância intra-sinal ÷ distância aleatória | 0,80 |
+| razão por grupo (mão esq. / mão dir. / corpo) | 0,79 / 0,83 / 0,85 |
+| remover as amostras com outlier (\|v\|>5) | não muda nada |
+
+A busca está correta; a **representação** é que separa mal entre pessoas. O
+mesmo sinal feito por dois articuladores fica só 20% mais perto que dois sinais
+quaisquer, e com 1.363 classes isso produz os 7,5% medidos.
+
+Vocabulário menor não salva — a fraqueza é uniforme em toda escala:
+
+| sinais no dicionário | 25 | 100 | 500 | 1.363 |
+|---|---|---|---|---|
+| recall@5 | 56,8% | 24,0% | 11,5% | 7,5% |
+| acaso | 20% | 5% | 1% | 0,4% |
+
+Engenharia de feature sobre DTW também não: z-normalizar as sequências leva o
+recall@5 de 16,4% para 20,2% num vocabulário de 250 — ganho real, longe de
+suficiente.
+
+É aqui, e só aqui, que o **encoder neural com metric learning** se justifica:
+ele tem 7,5% para bater, medido no mesmo protocolo. Até ele existir, o modo
+`--sinais` funciona como demonstração do pipeline e como ferramenta pessoal via
+re-ancoragem (`1`–`5`), que contorna o problema para a sua própria mão.
 
 ---
 
@@ -642,8 +689,11 @@ training/
   prepare_sinais.py    extrai os vídeos do V-LIBRASIL
   eval_sinais.py       leave-one-articulator-out
 
-tests/            273 testes, espelhando a mesma divisão
-scripts/          download dos modelos do MediaPipe
+tests/            297 testes, espelhando a mesma divisão
+scripts/
+  download_model.sh       modelos do MediaPipe (~17 MB)
+  download_vlibrasil.sh   base de sinais do espelho no Kaggle (~10,8 GB)
+  organizar_vlibrasil.py  layout plano do espelho → pasta por articulador
 models/           hand_landmarker.task, pose_landmarker.task, classifier.joblib
 data/             dataset_publico.npz, coletados/*.npy, sinais/, raw/
 ```
@@ -730,9 +780,11 @@ N antes da cascata de recuperação.
 modelo tem todo incentivo para aprender as pessoas. O leave-one-articulator-out
 mede isso e a re-ancoragem corrige no uso — mas a base é essa.
 
-**Nenhum número medido ainda.** O pipeline está pronto e testado; o dicionário
-depende de baixar os 10,5 GB e rodar a extração. Até lá não há recall@5 aqui, e
-inventar um seria pior que não ter.
+**recall@5 de 7,5%.** Medido, não estimado: 4.086 consultas em
+leave-one-articulator-out. A busca está correta (auto-recuperação 6/6) e os
+vetores são sadios — o que falha é a representação generalizar entre pessoas.
+Não é um dicionário utilizável ainda, e o encoder neural existe no roteiro
+exatamente por isso.
 
 **Sem expressão facial.** É fonema em Libras, e sinais que só diferem por ela
 vão colidir. 468 pontos de rosto sobre três amostras por classe seria ruído
@@ -745,19 +797,25 @@ segmentação de frases contínuas.
 
 ## Próximos passos
 
+~~1. Construir e medir o dicionário de sinais.~~ **Feito.** 4.086 vídeos
+extraídos, recall@5 de 7,5% registrado em `models/relatorio_sinais.txt`. Era o
+número do qual tudo abaixo dependia, e ele decidiu o item 1 atual.
+
 Em ordem de valor:
 
-1. **Construir e medir o dicionário de sinais.** Baixar o V-LIBRASIL, rodar
-   `prepare_sinais.py` e `eval_sinais.py`. Tudo abaixo depende deste número.
+1. **Encoder neural para os sinais — aprovado, adiado.** A baseline DTW mede
+   7,5% de recall@5 e não sustenta o produto; a decisão que `relatorio_sinais.txt`
+   existia para registrar está registrada. GRU ou Transformer pequeno com
+   ArcFace, treinado sobre os mesmos 4.086 protótipos já extraídos e avaliado no
+   mesmo leave-one-articulator-out — **tem 7,5% para bater**. É a maior mudança
+   de dependência do projeto (torch), e por isso está agendada e não improvisada.
+   O plano está em [Notas de construção do dicionário](docs/notas-de-construcao-do-dicionario.md#o-que-vem-depois).
 2. **Conjunto de avaliação separado do alfabeto.** Uma sessão de gravação em
    outro dia, outra luz, outra roupa, usada só como teste. É o que transforma
    "achei que melhorou" em evidência.
-3. **Encoder neural para os sinais**, se o recall@5 do DTW não sustentar o
-   produto — GRU ou Transformer pequeno com ArcFace, avaliado contra a mesma
-   baseline. É a decisão que `relatorio_sinais.txt` vai registrar.
-4. **Features geométricas no alfabeto** — ângulos entre dedos e distâncias
+3. **Features geométricas no alfabeto** — ângulos entre dedos e distâncias
    ponta-a-ponta somados às coordenadas cruas, mirando U/V e B/W.
-5. **Autocorreção com dicionário PT-BR** — um erro em dez letras arruína a
+4. **Autocorreção com dicionário PT-BR** — um erro em dez letras arruína a
    palavra inteira; a palavra em andamento já aparece destacada.
 
 ---
@@ -768,6 +826,11 @@ Em ordem de valor:
   — as decisões de arquitetura, as alternativas rejeitadas e o porquê de cada uma.
 - [Design da fase 2 — dicionário reverso de sinais](docs/superpowers/specs/2026-08-11-sinais-dicionario-design.md)
   — a restrição de três gravações por sinal e o que ela obriga.
+- [Notas de construção do dicionário](docs/notas-de-construcao-do-dicionario.md)
+  — o que quebrou entre "o pipeline está pronto" e um recall@5 medido: o site da
+  UFPE fora do ar, o `unzip` que corrompe UTF-8, o layout que destruiria a
+  avaliação em silêncio, e o bug que eu inventei medindo com média em vez de
+  mediana. Traz também o plano do encoder.
 
 ---
 

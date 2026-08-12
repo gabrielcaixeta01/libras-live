@@ -1,0 +1,36 @@
+========================================================================
+DICIONÁRIO REVERSO DE SINAIS — leave-one-articulator-out
+========================================================================
+
+métrica de busca ......... dtw
+protótipos ............... 4086
+sinais distintos ......... 1363
+gravações por sinal ...... 3.00
+articuladores ............ articulador_1, articulador_2, articulador_3
+tempo de avaliação ....... 4.1 min
+
+------------------------------------------------------------------------
+RODÍZIOS
+------------------------------------------------------------------------
+
+  sem articulador_1  1364 consultas   recall@1   2.2%   recall@5   6.5%   MRR   3.7%
+  sem articulador_2  1360 consultas   recall@1   3.3%   recall@5   8.8%   MRR   5.2%
+  sem articulador_3  1362 consultas   recall@1   3.2%   recall@5   7.1%   MRR   4.5%
+  TOTAL             4086 consultas   recall@1   2.9%   recall@5   7.5%   MRR   4.4%
+
+------------------------------------------------------------------------
+LEITURA
+------------------------------------------------------------------------
+
+A resposta certa aparece na tela em 7.5% das consultas.
+Ela vem em primeiro lugar em 2.9%.
+
+recall@5 é a métrica do produto: a tela mostra cinco candidatos, e um
+dicionário em que você reconhece a palavra certa entre cinco funciona.
+recall@1 descreve o conforto, não o serviço.
+
+Referência da área para busca em vocabulário grande: 50,8% de MRR em
+10.235 sinais (arXiv:2502.20171).
+
+A baseline DTW não sustenta o produto sozinha. É aqui que o encoder
+neural com metric learning se justifica: ele tem este número para bater.
