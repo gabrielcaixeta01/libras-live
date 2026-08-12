@@ -11,8 +11,10 @@ honesta possível com três pessoas — leave-one-articulator-out:
       articulador_2/casa.mp4
       articulador_3/casa.mp4
 
-São ~4.089 vídeos e ~370 mil frames: conte 2 a 5 horas de CPU. O trabalho é
-retomável — interromper e rodar de novo continua de onde parou.
+São ~4.089 vídeos e ~370 mil frames. A extração roda em vários processos por
+padrão (`--jobs`), o que traz o trabalho de 2-5 horas para a casa da meia hora
+numa máquina de 10 núcleos. O trabalho é retomável — interromper e rodar de novo
+continua de onde parou.
 
 Nenhum frame é gravado. Cada vídeo vira 32×147 números e a imagem é descartada,
 exatamente como na fase 1.
@@ -21,10 +23,13 @@ exatamente como na fase 1.
 from __future__ import annotations
 
 import argparse
+import multiprocessing
+import os
 import sys
 import time
 from collections import Counter
 from pathlib import Path
+from typing import Iterator, NamedTuple
 
 import cv2
 import numpy as np
@@ -38,6 +43,25 @@ from libras.dicionario import Dicionario  # noqa: E402
 
 LARGURA_PROCESSAMENTO = 640  # 1440p não melhora landmark e custa 5x mais tempo
 SALVAR_A_CADA = 100
+
+
+def jobs_padrao() -> int:
+    """Quantos processos usar sem que a máquina fique inusável.
+
+    Cada worker carrega dois modelos do MediaPipe (~400 MB), então o teto não é
+    o número de núcleos e sim a RAM. Oito é o limite prático em 16 GB.
+    """
+    return max(1, min(8, (os.cpu_count() or 2) - 2))
+
+
+class Resultado(NamedTuple):
+    """O que sai de um vídeo. Atravessa processos, então só tipos simples."""
+
+    caminho: str
+    vetores: np.ndarray | None
+    rotulo: str | None
+    articulador: str | None
+    problema: str | None
 
 
 def ler_gravacao(
@@ -92,12 +116,111 @@ def _landmarks_do_frame(frame_bgr, detector: DetectorSinais, marca_ms: int) -> n
     return detector.detectar(rgb, timestamp_ms=marca_ms).frame
 
 
+def processar(
+    video: Path,
+    raiz: Path,
+    passo: int,
+    canhotos: set[str],
+    detector: DetectorSinais,
+    relogio_ms: int,
+) -> tuple[Resultado, int]:
+    """Um vídeo → `Resultado`. Nenhum erro de um arquivo derruba a extração.
+
+    Devolve o relógio junto porque ele pertence ao detector, não ao vídeo: quem
+    chamar de novo com o mesmo detector precisa continuar de onde parou.
+    """
+    articulador = catalogo.articulador_do_caminho(video, raiz)
+
+    try:
+        bruta, relogio_ms = ler_gravacao(video, detector, passo, relogio_ms)
+        if bruta is None:
+            return Resultado(str(video), None, None, None, "vídeo ilegível ou vazio"), relogio_ms
+
+        pronta = sequencia.preparar(bruta, espelhar=articulador in canhotos)
+        return (
+            Resultado(
+                str(video),
+                pronta.vetores,
+                catalogo.rotulo_do_arquivo(video),
+                articulador,
+                None,
+            ),
+            relogio_ms,
+        )
+    except ValueError as erro:
+        motivo = str(erro).split("—")[0].strip()
+        return Resultado(str(video), None, None, None, motivo), relogio_ms
+
+
+# --- worker -----------------------------------------------------------------
+#
+# O detector é global do processo porque criá-lo custa uma carga de modelo: um
+# por worker, não um por vídeo. Cada worker tem o seu, e por isso o relógio de
+# timestamps também é por worker — a monotonicidade que o MediaPipe exige vale
+# por landmarker, e processos separados não compartilham nenhum.
+
+_DETECTOR: DetectorSinais | None = None
+_RELOGIO_MS = 0
+
+
+def _abrir_detector() -> None:
+    """Um detector por worker, vivo enquanto o pool viver.
+
+    Não há `fechar()` nem `atexit` aqui de propósito: o worker morre junto com o
+    pool e o sistema recupera os recursos nativos. Fechá-los durante o shutdown
+    do interpretador só produzia tracebacks de `Exception ignored`, porque a
+    essa altura o MediaPipe já desmontou parte do que o `close()` procura.
+    """
+    global _DETECTOR
+    _DETECTOR = DetectorSinais()
+
+
+def _processar_tarefa(tarefa: tuple[str, str, int, frozenset]) -> Resultado:
+    global _RELOGIO_MS
+    caminho, raiz, passo, canhotos = tarefa
+    assert _DETECTOR is not None, "worker sem detector: initializer não rodou"
+
+    resultado, _RELOGIO_MS = processar(
+        Path(caminho), Path(raiz), passo, set(canhotos), _DETECTOR, _RELOGIO_MS
+    )
+    return resultado
+
+
+def _sequencial(
+    videos: list[Path], raiz: Path, passo: int, canhotos: set[str]
+) -> Iterator[Resultado]:
+    relogio_ms = 0  # contínuo entre vídeos; ver `ler_gravacao`
+
+    with DetectorSinais() as detector:
+        for video in videos:
+            resultado, relogio_ms = processar(
+                video, raiz, passo, canhotos, detector, relogio_ms
+            )
+            yield resultado
+
+
+def _paralelo(
+    videos: list[Path], raiz: Path, passo: int, canhotos: set[str], jobs: int
+) -> Iterator[Resultado]:
+    """Mesmos resultados do sequencial, em N processos.
+
+    `spawn` é o padrão do macOS e o único seguro aqui: o MediaPipe segura
+    recursos nativos que não sobrevivem a um fork.
+    """
+    tarefas = [(str(v), str(raiz), passo, frozenset(canhotos)) for v in videos]
+    contexto = multiprocessing.get_context("spawn")
+
+    with contexto.Pool(jobs, initializer=_abrir_detector) as pool:
+        yield from pool.imap_unordered(_processar_tarefa, tarefas, chunksize=4)
+
+
 def extrair(
     raiz: Path,
     passo: int,
     canhotos: set[str],
     limite: int | None,
     parcial: Path,
+    jobs: int = 1,
 ) -> tuple[list[np.ndarray], list[str], list[str], Counter]:
     videos = catalogo.listar_videos(raiz)
     if limite:
@@ -110,34 +233,38 @@ def extrair(
         print(f"retomando: {len(feitos)} vídeos já processados")
 
     pendentes = [v for v in videos if str(v) not in feitos]
-    print(f"{len(videos)} vídeos no total, {len(pendentes)} a processar\n")
+    print(f"{len(videos)} vídeos no total, {len(pendentes)} a processar")
+    print(f"{jobs} processo(s) em paralelo\n")
 
     inicio = time.time()
-    relogio_ms = 0  # contínuo entre vídeos; ver `ler_gravacao`
+    fluxo = (
+        _sequencial(pendentes, raiz, passo, canhotos)
+        if jobs == 1
+        else _paralelo(pendentes, raiz, passo, canhotos, jobs)
+    )
 
-    with DetectorSinais() as detector:
-        for i, video in enumerate(pendentes, start=1):
-            articulador = catalogo.articulador_do_caminho(video, raiz)
+    try:
+        for i, resultado in enumerate(fluxo, start=1):
+            if resultado.problema:
+                problemas[resultado.problema] += 1
+            else:
+                representacoes.append(resultado.vetores)
+                rotulos.append(resultado.rotulo)
+                fontes.append(resultado.articulador)
 
-            try:
-                bruta, relogio_ms = ler_gravacao(video, detector, passo, relogio_ms)
-                if bruta is None:
-                    problemas["vídeo ilegível ou vazio"] += 1
-                else:
-                    pronta = sequencia.preparar(
-                        bruta, espelhar=articulador in canhotos
-                    )
-                    representacoes.append(pronta.vetores)
-                    rotulos.append(catalogo.rotulo_do_arquivo(video))
-                    fontes.append(articulador)
-            except ValueError as erro:
-                problemas[str(erro).split("—")[0].strip()] += 1
-
-            feitos.add(str(video))
+            feitos.add(resultado.caminho)
             _progresso(i, len(pendentes), inicio, len(representacoes))
 
             if i % SALVAR_A_CADA == 0:
                 _salvar_parcial(parcial, representacoes, rotulos, fontes, feitos)
+    except KeyboardInterrupt:
+        # Uma hora de trabalho não pode morrer por um Ctrl-C mal colocado. O
+        # parcial só é gravado a cada SALVAR_A_CADA, então sem isto a
+        # interrupção jogaria fora até 99 vídeos já processados.
+        _salvar_parcial(parcial, representacoes, rotulos, fontes, feitos)
+        print(f"\n\ninterrompido — {len(feitos)} vídeos salvos em {parcial}")
+        print("rode de novo para continuar de onde parou")
+        raise
 
     print()
     return representacoes, rotulos, fontes, problemas
@@ -227,12 +354,21 @@ def main() -> None:
         help="articulador canhoto, a ser espelhado (pode repetir)",
     )
     ap.add_argument("--limite", type=int, help="processa só os N primeiros (teste)")
+    ap.add_argument(
+        "--jobs",
+        type=int,
+        default=jobs_padrao(),
+        help=f"processos em paralelo; 1 desliga (padrão: {jobs_padrao()})",
+    )
     args = ap.parse_args()
+
+    if args.jobs < 1:
+        ap.error("--jobs deve ser >= 1")
 
     parcial = args.saida.with_suffix(".parcial.npz")
 
     representacoes, rotulos, fontes, problemas = extrair(
-        args.videos, args.passo, set(args.canhoto), args.limite, parcial
+        args.videos, args.passo, set(args.canhoto), args.limite, parcial, args.jobs
     )
 
     if not representacoes:
