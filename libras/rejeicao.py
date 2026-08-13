@@ -171,7 +171,7 @@ def recusar(
         return True
 
     if limiar_margem is not None and len(candidatos) >= 2:
-        if candidatos[1].distancia - candidatos[0].distancia < limiar_margem:
-            return True
+        margem = candidatos[1].distancia - candidatos[0].distancia
+        return margem < limiar_margem
 
     return False

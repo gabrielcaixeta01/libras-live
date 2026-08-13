@@ -535,13 +535,20 @@ def montar_relatorio(
         "ENCODER NEURAL DE SINAIS — leave-one-articulator-out",
         "=" * 72,
         "",
-        f"arquitetura .............. GRU bidirecional {hp.camadas}x{hp.oculto}"
-        f" → embedding {hp.dimensao}d",
-        f"entrada .................. 32×{hp.dim_entrada}"
-        f" ({'posição + velocidade' if hp.com_velocidade else 'posição'}"
-        f"{', z-normalizada' if hp.z else ''})",
-        f"perda .................... ArcFace (margem {config.ARCFACE_MARGEM}, "
-        f"escala {config.ARCFACE_ESCALA})",
+        (
+            f"arquitetura .............. GRU bidirecional {hp.camadas}x{hp.oculto}"
+            f" → embedding {hp.dimensao}d"
+        ),
+        (
+            f"entrada .................. 32×{hp.dim_entrada}"
+            f" ({'posição + velocidade' if hp.com_velocidade else 'posição'}"
+            f"{', configuração de mão' if hp.com_maos else ''}"
+            f"{', z-normalizada' if hp.z else ''})"
+        ),
+        (
+            f"perda .................... ArcFace (margem {config.ARCFACE_MARGEM}, "
+            f"escala {config.ARCFACE_ESCALA})"
+        ),
         f"épocas por rodízio ....... {epocas}",
         f"protótipos ............... {len(amostras)}",
         f"sinais distintos ......... {len(set(amostras.chaves))}",
@@ -646,8 +653,10 @@ def _secao_de_rejeicao(medidas: list[rejeicao.Consulta]) -> list[str]:
         linhas += [
             "",
             f"  {criterio.upper()}",
-            f"  {'cobertura':>10s}  {'corte':>7s}  {'listas com resposta':>19s}"
-            f"  {'invenção cortada':>16s}",
+            (
+                f"  {'cobertura':>10s}  {'corte':>7s}  {'listas com resposta':>19s}"
+                f"  {'invenção cortada':>16s}"
+            ),
         ]
         for alvo in (0.99, 0.95, 0.90, 0.80):
             opcao = rejeicao.calibrar(medidas, criterio, alvo)
@@ -665,11 +674,14 @@ def _secao_de_rejeicao(medidas: list[rejeicao.Consulta]) -> list[str]:
         return linhas
 
     vencedor = max(escolhas.values(), key=lambda c: c.recusa_correta)
+    perdedor = min(escolhas.values(), key=lambda c: c.recusa_correta)
     linhas += [
         "",
         f"  Na cobertura de {rejeicao.COBERTURA_MINIMA:.0%}, quem corta mais invenção é a",
-        f"  **{vencedor.criterio}**: {vencedor.recusa_correta:.1%} contra "
-        f"{min(escolhas.values(), key=lambda c: c.recusa_correta).recusa_correta:.1%}.",
+        (
+            f"  **{vencedor.criterio}**: {vencedor.recusa_correta:.1%} contra "
+            f"{perdedor.recusa_correta:.1%}."
+        ),
         "  A coluna que decide não é essa, e sim a cobertura: num dicionário uma",
         "  lista errada custa um olhar, e um acerto apagado custa a resposta.",
         "",

@@ -17,9 +17,9 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import cv2
 import numpy as np
@@ -98,9 +98,17 @@ def carregar_busca(apenas_nucleo: bool = True) -> Busca:
         apenas_nucleo=apenas_nucleo,
     )
 
+    # `codificar_medio` e não `codificar`: é ele que o treino usa para gravar os
+    # embeddings do dicionário, e os dois lados da busca precisam ser produzidos
+    # do mesmo jeito. Com `ENC_TTA = 1` a função devolve o embedding simples e
+    # isto não custa nada — mas se alguém ligar o TTA, o índice passaria a ser
+    # média de aumentos e a consulta não, o que desalinharia a comparação em
+    # silêncio.
     return Busca(
         dicionario=dicionario,
-        representar=lambda pronta: encoder.codificar(modelo, pronta.vetores),
+        representar=lambda pronta: encoder.codificar_medio(
+            modelo, pronta.vetores, config.ENC_TTA
+        ),
         prototipos=config.PROTOTIPOS_USUARIO_EMBEDDINGS,
     )
 

@@ -110,17 +110,23 @@ SEGUNDOS_MOSTRANDO = 4.0  # quanto tempo o resultado fica na tela
 # sinais fora do núcleo. Ver models/relatorio_encoder.txt.
 #
 # **O que ele compra é pouco, e o relatório mostra isso.** As duas distribuições
-# se sobrepõem: preservando 95% dos acertos, o corte recusa só 8,5% das consultas
-# que não tinham resposta. Custa ~1,8 ponto de recall@5 (37,3% → 35,5%) e em
-# troca o app para de inventar nos piores casos. A distância do cosseno não é
-# confiança, e enquanto ela for o único sinal disponível o limiar fica assim.
-REJEICAO_COSSENO: float | None = 0.4723
+# se sobrepõem: preservando 95% dos acertos, o corte recusa só 10,5% das consultas
+# que não tinham resposta. Custa pouco mais de 1 ponto de recall@5 e em troca o
+# app para de inventar nos piores casos. A distância do cosseno não é confiança,
+# e enquanto ela for o único sinal disponível o limiar fica assim.
+REJEICAO_COSSENO: float | None = 0.5384
 
 # O segundo critério, e ele mede outra coisa: não "isto parece com alguma
 # coisa?" e sim "isto parece com **uma** coisa?". Um sinal que o dicionário não
 # tem cai no meio de vários protótipos parecidos e não destaca nenhum. Abaixo
 # desta diferença entre o primeiro e o segundo candidato, a lista é um empate e
 # o app recusa. Ver `libras/rejeicao.py` e o relatório do encoder.
+#
+# **Fica desligado, e o relatório é quem decide.** Calibrados na mesma cobertura
+# de 95%, a margem corta 8,6% da invenção e a distância corta 10,5% — a distância
+# ganha. Ligar os dois não soma: cada um gasta 5% da cobertura por conta própria,
+# e juntos jogariam fora ~10% dos acertos para cortar pouco mais que o melhor
+# deles sozinho. O corte medido da margem, se você quiser trocar, é 0,0087.
 REJEICAO_MARGEM: float | None = None
 
 # A baseline DTW não tem limiar calibrado: a distância dela não tem a mesma
@@ -145,13 +151,13 @@ def limiares_de_rejeicao(metrica: str) -> tuple[float | None, float | None]:
 # O número que o encoder existe para bater, medido pela baseline DTW no mesmo
 # leave-one-articulator-out e registrado em models/relatorio_sinais.txt. Está
 # aqui para que o relatório do encoder possa dar veredito sozinho.
-BASELINE_DTW_RECALL5 = 0.075
+BASELINE_DTW_RECALL5 = 0.072
 
 # O mesmo número, no vocabulário núcleo — que é o que o app indexa por padrão.
 # Medido com `python training/eval_sinais.py --nucleo` sobre 490 consultas.
 # São 2,9x o vocabulário inteiro sem trocar nada na busca: só há 163 sinais para
 # confundir em vez de 1.363.
-BASELINE_DTW_NUCLEO_RECALL5 = 0.214
+BASELINE_DTW_NUCLEO_RECALL5 = 0.208
 
 DIMENSAO_EMBEDDING = 256   # o vetor que substitui a sequência de 32×147
 ENC_OCULTO = 256           # unidades por direção da GRU

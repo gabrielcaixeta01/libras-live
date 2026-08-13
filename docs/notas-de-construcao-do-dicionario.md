@@ -245,7 +245,9 @@ rodízio**. Nenhuma arquitetura resolve few-shot com o objetivo já certo.
 ### O que o vocabulário aberto respondeu
 
 Duzentos sinais ficaram fora do treino do encoder e entraram só como protótipo:
-**12,3% de recall@5**, contra 10,3% do vocabulário inteiro.
+**12,3% de recall@5**, contra 10,3% do vocabulário inteiro. (Refeita depois das
+correções de representação: **19,3% contra 16,4%** — a mesma conclusão, num
+patamar mais alto.)
 
 Sinal que o encoder nunca viu se comporta tão bem quanto — melhor que — sinal que
 ele treinou. Isso diz duas coisas. A boa: a promessa "adiciono um sinal novo com
@@ -309,17 +311,108 @@ escreve o aviso no próprio relatório.
 
 ---
 
+## A configuração de mão era invisível para a rede
+
+Escrito em 12–13 de agosto de 2026, na revisão geral do projeto.
+
+A normalização dos sinais ancora tudo no ponto médio dos ombros e divide pela
+largura entre eles. Isso é o certo para a **localização** e para a
+**trajetória** — que são fonemas, e que a normalização do alfabeto apagava. Mas
+tem um efeito colateral que ninguém tinha medido: sob essa escala, a mão inteira
+ocupa cerca de um terço de largura de ombro, e a diferença entre um punho fechado
+e uma mão espalmada é uma fração disso.
+
+Medindo a variância por grupo de canais, a variação dos 21 pontos de mão fica
+**ordens de grandeza** abaixo da variação da trajetória do braço. Para uma rede
+treinada com ArcFace sobre o vetor inteiro, isso não é um canal fraco, é um canal
+que não existe: o gradiente vem todo de onde a mão está, e nada de qual é a mão.
+
+A correção é `sequencia.maos_locais`, e ela não descarta nada — acrescenta. Cada
+mão vira 20 pontos ancorados no **pulso** e divididos pela **própria escala** (a
+distância do pulso ao MCP do dedo médio), 120 números que entram ao lado dos 294
+de posição e velocidade. A mesma informação que já estava lá, agora numa escala
+em que ela pode competir.
+
+| entrada | semente 0 | semente 1 | semente 2 | média |
+|---|---|---|---|---|
+| posição + velocidade | 36,3% | 34,5% | 36,7% | 35,8% |
+| **\+ configuração de mão** | 45,5% | 43,3% | 46,7% | **45,2%** |
+
+**+9,4 pontos de recall@5**, três sementes de cada lado, no mesmo
+leave-one-articulator-out sobre o núcleo. É a maior melhoria isolada de todo o
+projeto de sinais.
+
+### O piso de ruído, e as cinco hipóteses que ele matou
+
+Antes dessa medição eu não sabia o que era ganho e o que era sorte. Três
+sementes do mesmo experimento variam **±1,3 ponto** neste protocolo — 490
+consultas é pouco, e o treino tem inicialização aleatória, embaralhamento e
+aumento estocástico.
+
+Estabelecer esse piso foi o segundo resultado mais útil da sessão, porque ele
+converteu cinco "melhorias" em nada:
+
+| hipótese | medido | veredito |
+|---|---|---|
+| aumento por oclusão (apagar uma mão por um trecho) | 46,5% / 46,9% vs 46,7% | dentro do ruído |
+| TTA×5 (média de embeddings aumentados) | 47,1% vs 46,7% | dentro do ruído |
+| velocidade da mão em escala própria | 41,0% | **pior** |
+| pré-treino no vocabulário inteiro, depois núcleo | 42,9% | **pior** |
+| variações de dropout | dentro do ruído | nada |
+
+As duas primeiras ficam no código atrás de flags desligadas (`ENC_AUG_OCLUSAO`,
+`ENC_TTA`), porque medir de novo é mais caro que manter. A terceira foi removida
+inteira. A quarta virou `--pre-epocas`, documentada com o número ao lado.
+
+**Lição:** sem o piso de ruído, quatro dessas cinco teriam entrado no projeto —
+duas delas piorando o produto — e cada uma teria trazido uma explicação
+convincente do porquê tinha funcionado. Uma medida só vira evidência depois que
+se sabe o tamanho do acaso contra o qual ela compete.
+
+### Uma hipótese rejeitada por medida, não por argumento
+
+Suspeita razoável: os vídeos do V-LIBRASIL têm mediana de 192 frames, e o
+`Segmentador` do app corta o sinal assim que a mão para. Se as gravações fossem
+majoritariamente repouso nas bordas, o encoder estaria treinando numa moldura que
+nunca vê em uso — um descasamento silencioso entre treino e inferência, do tipo
+que este projeto já cometeu duas vezes.
+
+Medido: apenas **3,5%** das gravações têm mais de um terço de repouso nas bordas.
+O movimento é denso ao longo de quase todas. A hipótese caiu, e nenhuma linha de
+código mudou por causa dela.
+
+### Uma armadilha adormecida entre o índice e a consulta
+
+Achada na mesma revisão, sem sintoma nenhum hoje. O treino grava os embeddings do
+dicionário com `encoder.codificar_medio(..., ENC_TTA)`; o app codificava a
+consulta com `encoder.codificar`. Com `ENC_TTA = 1` as duas funções fazem
+exatamente a mesma coisa, então nada quebra — mas ligar o TTA passaria a construir
+o índice com média de aumentos e a consulta sem, e o cosseno estaria comparando
+duas coisas produzidas de jeitos diferentes.
+
+Nenhum teste pegaria: os dois lados continuariam normalizados, a busca continuaria
+rodando, e o recall cairia um pouco sem que nada apontasse para a causa. O app
+agora chama a mesma função que o treino.
+
+**Lição:** um parâmetro que existe nos dois lados de uma comparação precisa
+atravessar os dois lados pelo mesmo código. "Está desligado" não é uma defesa, é
+um adiamento.
+
+---
+
 ## O que vem depois
 
 **Mais gravações por sinal.** É o que o encoder mediu, não o que ele supôs: com o
-objetivo de treino correto e a representação aprendida, o teto de 10,3% é o teto
-de três exemplos por classe. As duas saídas são outra base de Libras isolada
-somada ao V-LIBRASIL, ou a re-ancoragem em escala — as gravações que a própria
-pessoa faz no uso já são protótipos e já entram sem retreino.
+objetivo de treino correto e a representação aprendida, o teto é o teto de três
+exemplos por classe. As duas saídas são outra base de Libras isolada somada ao
+V-LIBRASIL, ou a re-ancoragem em escala — as gravações que a própria pessoa faz
+no uso já são protótipos e já entram sem retreino.
 
-**Depois dela, a máscara de validade** (acima, com o custo).
+**Depois dela, a máscara de validade** (acima, com o custo). A troca por PCHIP
+reduziu o dano de imputar mal, mas não substitui dizer à rede o que foi medido e
+o que foi inventado.
 
 Enquanto isso o modo `--sinais` serve como demonstração do pipeline e como
 ferramenta pessoal: a re-ancoragem (`1`–`5`) contorna o problema para a sua
 própria mão, que é o caso de uso que funciona hoje — e agora ela contorna sobre
-uma representação 1,4x melhor.
+uma representação que, no núcleo, acerta **45,5%** contra os 20,8% do DTW.
