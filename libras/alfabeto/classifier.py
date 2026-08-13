@@ -63,7 +63,7 @@ class Classificador:
         cls,
         pacote: dict,
         limiar_rejeicao: float = config.CONFIANCA_REJEICAO,
-    ) -> "Classificador":
+    ) -> Classificador:
         """Constrói a partir do dicionário já carregado — usado nos testes."""
         instancia = object.__new__(cls)
         instancia._instalar(pacote, limiar_rejeicao)

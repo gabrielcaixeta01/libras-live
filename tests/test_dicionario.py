@@ -88,6 +88,23 @@ def test_reporta_de_qual_fonte_veio_a_melhor_correspondencia():
     assert casa.fonte == "art2"
 
 
+def test_dois_rotulos_do_mesmo_sinal_ocupam_uma_linha_so():
+    """`AVÓ` e `AVÔ` são dois rótulos do V-LIBRASIL para o mesmo sinal. Agrupar
+    por rótulo cru gastaria duas das cinco linhas com a mesma resposta."""
+    d = dicionario(
+        representacoes=np.stack([traj(0.0), traj(0.05), traj(2.0)]),
+        rotulos=["AVÓ", "AVÔ", "LIVRO"],
+        fontes=["art1", "art2", "art1"],
+    )
+
+    candidatos = d.buscar(traj(0.0), k=5)
+
+    assert len(candidatos) == 2
+    assert candidatos[0].rotulo in {"AVÓ", "AVÔ"}
+    assert d.sinais == 2
+    assert len(d.vocabulario) == 3
+
+
 # --- similaridade ---
 
 

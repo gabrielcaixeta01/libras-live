@@ -64,10 +64,16 @@ class Hiperparametros:
     dropout: float = config.ENC_DROPOUT
     com_velocidade: bool = True
     z: bool = False
+    # Falso por padrão porque um `.pt` gravado antes deste campo não o traz, e
+    # `Hiperparametros(**dados)` teria que inventar um valor — inventar o valor
+    # errado daria um encoder que carrega e devolve embedding sem sentido. Quem
+    # treina hoje passa `config.ENC_MAOS_LOCAIS` explicitamente.
+    com_maos: bool = False
 
     @property
     def dim_entrada(self) -> int:
-        return pose.TAMANHO_VETOR * (2 if self.com_velocidade else 1)
+        posicao = pose.TAMANHO_VETOR * (2 if self.com_velocidade else 1)
+        return posicao + (sequencia.TAMANHO_MAOS_LOCAIS if self.com_maos else 0)
 
 
 class Codificador(nn.Module):
@@ -161,12 +167,14 @@ def aumentar(
     escala: float = config.ENC_AUG_ESCALA,
     ruido: float = config.ENC_AUG_RUIDO,
     tempo: float = config.ENC_AUG_TEMPO,
+    oclusao: float = config.ENC_AUG_OCLUSAO,
 ) -> np.ndarray:
     """Uma variação plausível da mesma gravação. (T, 147) → (T, 147).
 
-    Quatro transformações, todas escolhidas por corresponderem a algo que muda
+    Cinco transformações, todas escolhidas por corresponderem a algo que muda
     de verdade entre duas gravações do mesmo sinal: o ângulo da câmera, o
-    tamanho aparente da pessoa, o erro do landmark e o ritmo.
+    tamanho aparente da pessoa, o erro do landmark, o ritmo e **a mão que o
+    MediaPipe perde**.
 
     **Sem espelhamento**, de propósito. No alfabeto trocar de mão dá a mesma
     letra; aqui o lado é fonema, e espelhar geraria um sinal diferente com o
@@ -186,7 +194,49 @@ def aumentar(
     if ruido > 0:
         girado += rng.normal(0.0, ruido, size=girado.shape).astype(np.float32)
 
+    girado = _ocultar_mao(girado, rng, oclusao)
+
     return _deformar_tempo(girado, rng, tempo).reshape(len(vetores), -1)
+
+
+def _ocultar_mao(
+    pontos: np.ndarray, rng: np.random.Generator, probabilidade: float
+) -> np.ndarray:
+    """Apaga uma das mãos por um trecho, e preenche o buraco como o pipeline faria.
+
+    É o aumento que corresponde à falha mais comum da medição real: a mão cruza
+    o corpo, o HandLandmarker a perde por meio segundo e `sequencia.imputar`
+    inventa o trecho. Isso acontece em taxas **diferentes por pessoa** — quem
+    sinaliza mais colado ao corpo perde mais mão —, então é exatamente uma das
+    coisas que separam o mesmo sinal feito por dois articuladores.
+
+    O buraco é preenchido por interpolação linear entre as bordas, e não zerado:
+    zerar ensinaria a rede a reconhecer um padrão que ela nunca vai ver, já que
+    o que chega até ela sempre passou pela imputação.
+    """
+    t = len(pontos)
+    if probabilidade <= 0 or t < 4 or rng.random() >= probabilidade:
+        return pontos
+
+    fatia = pose.MAO_ESQUERDA if rng.random() < 0.5 else pose.MAO_DIREITA
+    duracao = int(rng.integers(2, max(3, t // 2)))
+    inicio = int(rng.integers(0, t - duracao))
+    fim = inicio + duracao
+
+    saida = pontos.copy()
+    if inicio == 0:
+        saida[inicio:fim, fatia] = pontos[fim, fatia]
+    elif fim >= t:
+        saida[inicio:, fatia] = pontos[inicio - 1, fatia]
+    else:
+        borda_a, borda_b = pontos[inicio - 1, fatia], pontos[fim, fatia]
+        pesos = np.linspace(0.0, 1.0, duracao + 2, dtype=np.float32)[1:-1]
+        saida[inicio:fim, fatia] = (
+            borda_a[None] * (1.0 - pesos[:, None, None])
+            + borda_b[None] * pesos[:, None, None]
+        )
+
+    return saida
 
 
 def _rotacao(graus_y: float, graus_z: float) -> np.ndarray:
@@ -245,7 +295,7 @@ def dispositivo_padrao() -> torch.device:
 def entrada_do_modelo(vetores: np.ndarray, hp: Hiperparametros) -> np.ndarray:
     """(..., T, 147) → (..., T, dim_entrada), do jeito que este modelo espera."""
     return sequencia.caracteristicas(
-        vetores, com_velocidade=hp.com_velocidade, z=hp.z
+        vetores, com_velocidade=hp.com_velocidade, z=hp.z, com_maos=hp.com_maos
     )
 
 
@@ -284,6 +334,47 @@ def codificar(
 
     embeddings = np.concatenate(saidas).astype(np.float32)
     return embeddings[0] if unico else embeddings
+
+
+def codificar_medio(
+    modelo: Codificador,
+    vetores: np.ndarray,
+    repeticoes: int = config.ENC_TTA,
+    semente: int = 0,
+    dispositivo: torch.device | None = None,
+) -> np.ndarray:
+    """`codificar`, mas pela média de várias versões aumentadas da mesma gravação.
+
+    O embedding de uma gravação é uma estimativa ruidosa de onde aquele sinal
+    mora: um landmark que tremeu, um frame que a mão sumiu, e o vetor anda.
+    Codificar também algumas variações plausíveis — o mesmo giro, ruído e ritmo
+    do treino — e ficar com a média cancela parte desse tremor, do mesmo jeito
+    que uma média de medidas é melhor que uma medida.
+
+    A original entra sempre e o resultado volta à esfera unitária, porque a
+    média de vetores normalizados não tem norma 1 e a busca é por cosseno.
+
+    Custa `repeticoes` passadas pelo encoder. Em cima de 9 ms na MPS, isso cabe
+    numa consulta por sinal; não caberia numa por frame.
+    """
+    if repeticoes <= 1:
+        return codificar(modelo, vetores, dispositivo)
+
+    entrada = np.asarray(vetores, dtype=np.float32)
+    unico = entrada.ndim == 2
+    if unico:
+        entrada = entrada[None]
+
+    rng = np.random.default_rng(semente)
+    soma = codificar(modelo, entrada, dispositivo)
+
+    for _ in range(repeticoes - 1):
+        variacao = np.stack([aumentar(v, rng) for v in entrada])
+        soma = soma + codificar(modelo, variacao, dispositivo)
+
+    normas = np.maximum(np.linalg.norm(soma, axis=1, keepdims=True), 1e-8)
+    media = (soma / normas).astype(np.float32)
+    return media[0] if unico else media
 
 
 # --- persistência -----------------------------------------------------------

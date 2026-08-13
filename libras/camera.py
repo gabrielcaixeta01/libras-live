@@ -54,7 +54,7 @@ class Camera:
     def fechar(self) -> None:
         self._captura.release()
 
-    def __enter__(self) -> "Camera":
+    def __enter__(self) -> Camera:
         return self
 
     def __exit__(self, *_) -> None:

@@ -1,9 +1,10 @@
 """Treina o encoder neural dos sinais e mede, no mesmo protocolo, se ele paga o torch.
 
-    python training/train_sinais.py --treino-nucleo --aberto 0   # o que o app usa
+    python training/train_sinais.py --treino-nucleo     # o que o app usa
     python training/train_sinais.py                    # vocabulário inteiro
     python training/train_sinais.py --epocas 80        # mais treino
     python training/train_sinais.py --limite-sinais 40 # ensaio rápido
+    python training/train_sinais.py --treino-nucleo --so-rodizios --sem-maos  # ablação
 
 Entra o dicionário de protótipos já extraído (`data/sinais/dicionario.npz`,
 4.086 sequências de 32×147) e saem três coisas:
@@ -49,7 +50,7 @@ from torch.nn import functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from libras import avaliacao, catalogo, config, encoder, nucleo  # noqa: E402
+from libras import avaliacao, catalogo, config, encoder, nucleo, rejeicao  # noqa: E402
 from libras.dicionario import Dicionario  # noqa: E402
 
 # Quanto o encoder precisa multiplicar a baseline para que o torch entre por
@@ -167,19 +168,28 @@ def treinar(
     taxa: float = config.ENC_TAXA,
     margem: float = config.ARCFACE_MARGEM,
     aumentar: bool = True,
+    oclusao: float = config.ENC_AUG_OCLUSAO,
     semente: int = 0,
     rotulo: str = "treino",
+    inicial: encoder.Codificador | None = None,
 ) -> encoder.Codificador:
     """As sequências de treino → um encoder treinado. Nada mais entra aqui.
 
     A cabeça ArcFace é criada, usada e jogada fora: o que sobra é o encoder, que
     é a única parte que o app precisa. Um classificador de 1.163 saídas não teria
     o que fazer num dicionário onde você pode acrescentar um sinal novo.
+
+    `inicial` continua de um encoder já treinado em vez de partir do zero. É o
+    que permite pré-treinar no vocabulário inteiro e especializar no núcleo: a
+    cabeça é sempre nova, porque o conjunto de classes mudou, mas os pesos que
+    interessam — os que aprenderam o que é trajetória de mão — atravessam.
     """
     torch.manual_seed(semente)
     rng = np.random.default_rng(semente)
 
-    modelo = encoder.Codificador(hp).to(dispositivo)
+    modelo = (inicial if inicial is not None else encoder.Codificador(hp)).to(
+        dispositivo
+    )
     cabeca = encoder.ArcFace(hp.dimensao, classes).to(dispositivo)
 
     otimizador = torch.optim.AdamW(
@@ -208,7 +218,9 @@ def treinar(
             brutos = vetores[indices]
 
             if aumentar:
-                brutos = np.stack([encoder.aumentar(v, rng) for v in brutos])
+                brutos = np.stack(
+                    [encoder.aumentar(v, rng, oclusao=oclusao) for v in brutos]
+                )
 
             entrada = torch.from_numpy(
                 np.ascontiguousarray(encoder.entrada_do_modelo(brutos, hp))
@@ -256,11 +268,11 @@ class Rodizio:
     fonte: str
     posicoes: list[int | None]
     posicoes_abertas: list[int | None]
-    # (distância do primeiro candidato, a resposta certa estava na lista?) —
-    # a matéria-prima do limiar de rejeição. Ver `calibrar_rejeicao`. Vazia
-    # quando o índice não foi recortado: sem vocabulário fora dele, não há o que
-    # rejeitar.
-    confiancas: list[tuple[float, bool]] = field(default_factory=list)
+    # A matéria-prima do limiar de rejeição: as duas melhores distâncias de cada
+    # consulta, com "a resposta estava na lista?" ao lado. Ver `libras.rejeicao`.
+    # Vazia quando o índice não foi recortado: sem vocabulário fora dele, não há
+    # o que rejeitar.
+    consultas: list[rejeicao.Consulta] = field(default_factory=list)
 
     @property
     def metricas(self) -> avaliacao.Metricas:
@@ -271,87 +283,6 @@ class Rodizio:
         return avaliacao.agregar(self.posicoes_abertas)
 
 
-@dataclass(frozen=True)
-class Rejeicao:
-    """Onde cortar a distância, e o que se ganha e se perde cortando ali."""
-
-    limiar: float
-    aceitos_certos: int      # aceitou, e a resposta estava na lista
-    aceitos_errados: int     # aceitou, e não estava — é a mentira que o limiar corta
-    recusados_certos: int    # recusou uma consulta que teria acertado
-    recusados_errados: int   # recusou, e fez bem
-
-    @property
-    def precisao(self) -> float:
-        """Das listas que o app mostra, quantas contêm a resposta."""
-        mostradas = self.aceitos_certos + self.aceitos_errados
-        return self.aceitos_certos / mostradas if mostradas else 0.0
-
-    @property
-    def cobertura(self) -> float:
-        """Dos acertos possíveis, quantos sobrevivem ao limiar."""
-        possiveis = self.aceitos_certos + self.recusados_certos
-        return self.aceitos_certos / possiveis if possiveis else 0.0
-
-    @property
-    def recusa_correta(self) -> float:
-        """Do que não tinha resposta, quanto o app teve a honestidade de recusar."""
-        sem_resposta = self.aceitos_errados + self.recusados_errados
-        return self.recusados_errados / sem_resposta if sem_resposta else 0.0
-
-
-# Quanto dos acertos o limiar tem que preservar. O custo dos dois erros é
-# assimétrico e o número sai daí: mostrar cinco palavras erradas custa quase
-# nada num dicionário — você olha, não reconhece nenhuma e refaz o sinal —,
-# enquanto recusar uma consulta que teria acertado apaga a resposta que a pessoa
-# procurava. Maximizar o J de Youden ignora essa assimetria e foi medido em
-# 0,2878, um corte que guardava 37% dos acertos: mais honesto e muito menos útil.
-COBERTURA_MINIMA = 0.95
-
-
-def calibrar_rejeicao(
-    confiancas: list[tuple[float, bool]],
-    cobertura_minima: float = COBERTURA_MINIMA,
-) -> Rejeicao | None:
-    """A distância acima da qual o app deve dizer "não reconheci".
-
-    Sem limiar, a busca sempre responde: você faz um sinal que o dicionário não
-    tem e ele devolve os cinco mais parecidos com cara de resposta. Num
-    vocabulário de 163 sinais isso é a regra, não a exceção — o mundo tem mais
-    sinais fora do núcleo do que dentro.
-
-    O corte é o quantil `cobertura_minima` das distâncias que **deram certo**:
-    o app só recusa quando a melhor correspondência está pior do que 95% das
-    correspondências que acabaram acertando. É um corte conservador de propósito
-    — ver `COBERTURA_MINIMA`.
-
-    As consultas incluem, de propósito, os sinais **fora** do núcleo feitos pelo
-    articulador de teste. Eles não escolhem o corte, mas são o que mede o que
-    ele compra: sem eles o relatório não teria como dizer quanta invenção o
-    limiar corta.
-    """
-    if not 0.0 < cobertura_minima <= 1.0:
-        raise ValueError(f"cobertura_minima fora de (0, 1]: {cobertura_minima}")
-
-    certas = sorted(d for d, certo in confiancas if certo)
-    if not certas:
-        return None
-
-    posicao = min(len(certas) - 1, math.ceil(cobertura_minima * len(certas)) - 1)
-    limiar = certas[max(posicao, 0)]
-
-    aceitos_certos = sum(1 for d, c in confiancas if d <= limiar and c)
-    aceitos_errados = sum(1 for d, c in confiancas if d <= limiar and not c)
-
-    return Rejeicao(
-        limiar=limiar,
-        aceitos_certos=aceitos_certos,
-        aceitos_errados=aceitos_errados,
-        recusados_certos=len(certas) - aceitos_certos,
-        recusados_errados=(len(confiancas) - len(certas)) - aceitos_errados,
-    )
-
-
 def avaliar(
     modelo: encoder.Codificador,
     amostras: Amostras,
@@ -360,6 +291,7 @@ def avaliar(
     dispositivo: torch.device,
     k: int = config.CANDIDATOS_NA_TELA,
     chaves_indice: frozenset[str] | None = None,
+    tta: int = 0,
 ) -> Rodizio:
     """Codifica tudo, indexa com os outros articuladores e consulta com este.
 
@@ -372,7 +304,11 @@ def avaliar(
     para as consultas, porque a pergunta que ele responde é "quando você faz um
     sinal que o dicionário promete, ele acha?".
     """
-    embeddings = encoder.codificar(modelo, amostras.vetores, dispositivo)
+    embeddings = (
+        encoder.codificar_medio(modelo, amostras.vetores, tta, dispositivo=dispositivo)
+        if tta > 1
+        else encoder.codificar(modelo, amostras.vetores, dispositivo)
+    )
     completo = Dicionario(
         representacoes=embeddings,
         rotulos=amostras.rotulos,
@@ -387,20 +323,29 @@ def avaliar(
 
     posicoes: list[int | None] = []
     posicoes_abertas: list[int | None] = []
-    confiancas: list[tuple[float, bool]] = []
+    medidas: list[rejeicao.Consulta] = []
 
     for representacao, rotulo in consultas:
         candidatos = base.buscar(representacao, k=k)
         onde = avaliacao.posicao(candidatos, rotulo)
         posicoes.append(onde)
         if candidatos:
-            confiancas.append((candidatos[0].distancia, onde is not None))
+            medidas.append(_medir_consulta(candidatos, acertou=onde is not None))
         if catalogo.chave(rotulo) in abertos:
             posicoes_abertas.append(onde)
 
-    confiancas += _consultas_de_fora(completo, base, fonte_fora, chaves_indice, k)
+    medidas += _consultas_de_fora(completo, base, fonte_fora, chaves_indice, k)
 
-    return Rodizio(fonte_fora, posicoes, posicoes_abertas, confiancas)
+    return Rodizio(fonte_fora, posicoes, posicoes_abertas, medidas)
+
+
+def _medir_consulta(candidatos: list, acertou: bool) -> rejeicao.Consulta:
+    """As duas melhores distâncias de uma busca, que é o que a calibração come."""
+    return rejeicao.Consulta(
+        primeira=candidatos[0].distancia,
+        segunda=candidatos[1].distancia if len(candidatos) > 1 else math.inf,
+        acertou=acertou,
+    )
 
 
 def _consultas_de_fora(
@@ -409,7 +354,7 @@ def _consultas_de_fora(
     fonte_fora: str,
     chaves_indice: frozenset[str] | None,
     k: int,
-) -> list[tuple[float, bool]]:
+) -> list[rejeicao.Consulta]:
     """As gravações do articulador de teste que o índice **não** contém.
 
     São 1.200 sinais que o app promete não conhecer, e nenhum deles tem resposta
@@ -428,12 +373,56 @@ def _consultas_de_fora(
         if fonte == fonte_fora and catalogo.chave(rotulo) not in chaves_indice
     ]
 
-    confiancas = []
+    medidas = []
     for representacao in de_fora:
         candidatos = base.buscar(representacao, k=k)
         if candidatos:
-            confiancas.append((candidatos[0].distancia, False))
-    return confiancas
+            medidas.append(_medir_consulta(candidatos, acertou=False))
+    return medidas
+
+
+def pre_treinar(
+    amostras_amplas: Amostras,
+    fonte_fora: str | None,
+    abertos: set[str],
+    hp: encoder.Hiperparametros,
+    dispositivo: torch.device,
+    epocas: int,
+    **treino,
+) -> encoder.Codificador | None:
+    """Um encoder aquecido no vocabulário inteiro, para depois especializar no núcleo.
+
+    Treinar só nos 163 sinais do núcleo venceu treinar nos 1.363 (37,3% contra
+    29,8%), mas as duas opções desperdiçam metade da resposta: a primeira joga
+    fora 8x mais gravações do que usa, e a segunda gasta capacidade em classes
+    que nunca vão ser respondidas. O que aprende "isto é uma trajetória de mão"
+    não precisa saber quais palavras existem; o que separa 163 palavras precisa.
+
+    O articulador de fora **também fica de fora daqui**. Pré-treinar com ele
+    seria mostrar a pessoa de teste à rede por uma porta lateral, e o número
+    deixaria de ser honesto.
+    """
+    if epocas <= 0:
+        return None
+
+    dentro = [
+        i
+        for i, f in enumerate(amostras_amplas.fontes)
+        if fonte_fora is None or f != fonte_fora
+    ]
+    vetores, alvos, classes = _preparar_treino(amostras_amplas, dentro, abertos)
+
+    print(f"\n  pré-treino: {len(vetores)} gravações, {classes} classes")
+    return treinar(
+        vetores,
+        alvos,
+        classes,
+        hp,
+        dispositivo,
+        epocas=epocas,
+        rotulo="  pré-treino",
+        **treino,
+    )
 
 
 def rodiziar(
@@ -442,6 +431,9 @@ def rodiziar(
     hp: encoder.Hiperparametros,
     dispositivo: torch.device,
     chaves_indice: frozenset[str] | None = None,
+    amostras_amplas: Amostras | None = None,
+    pre_epocas: int = 0,
+    tta: int = 0,
     **treino,
 ) -> list[Rodizio]:
     """Um treino por articulador de fora. É o número honesto, e ele custa 3 treinos."""
@@ -455,6 +447,19 @@ def rodiziar(
             f"\nrodízio sem {fonte}: {len(vetores)} gravações, {classes} classes"
             f"{f', {len(abertos)} sinais fora do treino' if abertos else ''}"
         )
+        inicial = (
+            pre_treinar(
+                amostras_amplas,
+                fonte,
+                abertos,
+                hp,
+                dispositivo,
+                pre_epocas,
+                **{k: v for k, v in treino.items() if k != "epocas"},
+            )
+            if amostras_amplas is not None
+            else None
+        )
         modelo = treinar(
             vetores,
             alvos,
@@ -462,11 +467,18 @@ def rodiziar(
             hp,
             dispositivo,
             rotulo=f"sem {fonte}",
+            inicial=inicial,
             **treino,
         )
 
         rodizio = avaliar(
-            modelo, amostras, fonte, abertos, dispositivo, chaves_indice=chaves_indice
+            modelo,
+            amostras,
+            fonte,
+            abertos,
+            dispositivo,
+            chaves_indice=chaves_indice,
+            tta=tta,
         )
         print(f"  {rodizio.metricas}")
         if abertos:
@@ -533,7 +545,7 @@ def montar_relatorio(
         f"épocas por rodízio ....... {epocas}",
         f"protótipos ............... {len(amostras)}",
         f"sinais distintos ......... {len(set(amostras.chaves))}",
-        f"vocabulário do índice .... "
+        "vocabulário do índice .... "
         + (
             f"núcleo, {len(nucleo.CHAVES)} sinais"
             + (" (e o treino também)" if treino_nucleo else " (treino no vocabulário inteiro)")
@@ -570,40 +582,9 @@ def montar_relatorio(
             "  gravação e passa a ser encontrável, sem retreinar nada.",
         ]
 
-    confiancas = [c for r in rodizios for c in r.confiancas]
-    corte = calibrar_rejeicao(confiancas)
-    if corte is not None and no_nucleo:
-        de_fora = sum(1 for _, certo in confiancas if not certo)
-        linhas += [
-            "",
-            "-" * 72,
-            "LIMIAR DE REJEIÇÃO",
-            "-" * 72,
-            "",
-            "  Acima desta distância o app diz 'não reconheci' em vez de mostrar",
-            "  cinco palavras. Sem limiar ele sempre responde, e com 163 sinais no",
-            f"  índice quase tudo que existe está fora dele — as {de_fora} consultas",
-            "  sem resposta possível abaixo são o caso que ele existe para pegar.",
-            "",
-            f"  {'cobertura':>10s}  {'corte':>7s}  {'listas com resposta':>19s}"
-            f"  {'invenção cortada':>16s}",
-        ]
-        for alvo in (0.99, 0.95, 0.90, 0.80):
-            opcao = calibrar_rejeicao(confiancas, alvo)
-            marca = " <-" if abs(alvo - COBERTURA_MINIMA) < 1e-9 else ""
-            linhas.append(
-                f"  {opcao.cobertura:>9.1%}  {opcao.limiar:>7.4f}"
-                f"  {opcao.precisao:>19.1%}  {opcao.recusa_correta:>16.1%}{marca}"
-            )
-        linhas += [
-            "",
-            f"  Escolhido: {corte.limiar:.4f}, preservando {corte.cobertura:.1%} dos",
-            f"  acertos e recusando {corte.recusa_correta:.1%} do que não tinha resposta.",
-            "  A coluna que decide é a primeira: num dicionário, uma lista errada",
-            "  custa um olhar, e um acerto apagado custa a resposta.",
-            "",
-            f"  Ponha em config.REJEICAO_COSSENO: {corte.limiar:.4f}",
-        ]
+    medidas = [c for r in rodizios for c in r.consultas]
+    if medidas and no_nucleo:
+        linhas += _secao_de_rejeicao(medidas)
 
     linhas += [
         "",
@@ -634,6 +615,71 @@ def montar_relatorio(
         "",
     ]
     return "\n".join(linhas)
+
+
+def _secao_de_rejeicao(medidas: list[rejeicao.Consulta]) -> list[str]:
+    """Os dois critérios de recusa, medidos lado a lado nas mesmas consultas.
+
+    A escolha entre eles não é de gosto: a coluna "invenção cortada" diz quanto
+    cada um pega das consultas que não tinham resposta possível, na mesma
+    cobertura de acertos. Quem pegar mais, ganha.
+    """
+    de_fora = sum(1 for c in medidas if not c.acertou)
+    linhas = [
+        "",
+        "-" * 72,
+        "LIMIAR DE REJEIÇÃO",
+        "-" * 72,
+        "",
+        "  Quando o app deve dizer 'não reconheci' em vez de mostrar cinco",
+        "  palavras. Sem limiar ele sempre responde, e com 163 sinais no índice",
+        f"  quase tudo que existe está fora dele — as {de_fora} consultas sem",
+        "  resposta possível abaixo são o caso que ele existe para pegar.",
+        "",
+        "  DISTÂNCIA: recusa quando o melhor candidato está longe.",
+        "  MARGEM:    recusa quando o primeiro e o segundo estão empatados —",
+        "             não 'parece com alguma coisa?' e sim 'parece com UMA?'.",
+    ]
+
+    escolhas: dict[str, rejeicao.Corte] = {}
+    for criterio in ("distancia", "margem"):
+        linhas += [
+            "",
+            f"  {criterio.upper()}",
+            f"  {'cobertura':>10s}  {'corte':>7s}  {'listas com resposta':>19s}"
+            f"  {'invenção cortada':>16s}",
+        ]
+        for alvo in (0.99, 0.95, 0.90, 0.80):
+            opcao = rejeicao.calibrar(medidas, criterio, alvo)
+            if opcao is None:
+                continue
+            marca = " <-" if abs(alvo - rejeicao.COBERTURA_MINIMA) < 1e-9 else ""
+            if marca:
+                escolhas[criterio] = opcao
+            linhas.append(
+                f"  {opcao.cobertura:>9.1%}  {opcao.limiar:>7.4f}"
+                f"  {opcao.precisao:>19.1%}  {opcao.recusa_correta:>16.1%}{marca}"
+            )
+
+    if not escolhas:
+        return linhas
+
+    vencedor = max(escolhas.values(), key=lambda c: c.recusa_correta)
+    linhas += [
+        "",
+        f"  Na cobertura de {rejeicao.COBERTURA_MINIMA:.0%}, quem corta mais invenção é a",
+        f"  **{vencedor.criterio}**: {vencedor.recusa_correta:.1%} contra "
+        f"{min(escolhas.values(), key=lambda c: c.recusa_correta).recusa_correta:.1%}.",
+        "  A coluna que decide não é essa, e sim a cobertura: num dicionário uma",
+        "  lista errada custa um olhar, e um acerto apagado custa a resposta.",
+        "",
+        "  Ponha em config:",
+    ]
+    for criterio, corte in escolhas.items():
+        chave = "REJEICAO_COSSENO" if criterio == "distancia" else "REJEICAO_MARGEM"
+        linhas.append(f"    {chave} = {corte.limiar:.4f}")
+
+    return linhas
 
 
 def _baseline(no_nucleo: bool) -> float:
@@ -692,12 +738,16 @@ def main() -> None:
     ap.add_argument("--epocas", type=int, default=config.ENC_EPOCAS)
     ap.add_argument("--lote", type=int, default=config.ENC_LOTE)
     ap.add_argument("--taxa", type=float, default=config.ENC_TAXA)
+    ap.add_argument("--dropout", type=float, default=config.ENC_DROPOUT)
     ap.add_argument("--semente", type=int, default=0)
     ap.add_argument(
         "--aberto",
         type=int,
-        default=config.VOCABULARIO_ABERTO,
-        help="sinais fora do treino, medidos como vocabulário aberto (0 desliga)",
+        help=(
+            "sinais fora do treino, medidos como vocabulário aberto (0 desliga). "
+            f"Padrão: {config.VOCABULARIO_ABERTO}, e 0 com --treino-nucleo, onde "
+            "há 163 classes e reservar 200 não deixaria nada para treinar"
+        ),
     )
     ap.add_argument(
         "--limite-sinais",
@@ -727,9 +777,41 @@ def main() -> None:
     ap.add_argument("--sem-velocidade", action="store_true", help="só posição na entrada")
     ap.add_argument("--sem-aumento", action="store_true", help="desliga o aumento de dados")
     ap.add_argument(
+        "--oclusao",
+        type=float,
+        default=config.ENC_AUG_OCLUSAO,
+        help="chance de apagar uma mão por um trecho no aumento; 0 desliga",
+    )
+    ap.add_argument(
+        "--sem-maos",
+        action="store_true",
+        help="tira os canais de configuração de mão da entrada (ablação)",
+    )
+    ap.add_argument(
+        "--pre-epocas",
+        type=int,
+        default=0,
+        help=(
+            "pré-treina no vocabulário inteiro por N épocas antes de especializar "
+            "no núcleo; 0 desliga. Medido em 42,9%% contra 46,7%% sem: as 8x mais "
+            "gravações atrapalham em vez de ajudar. Só faz sentido com --treino-nucleo"
+        ),
+    )
+    ap.add_argument(
+        "--tta",
+        type=int,
+        default=config.ENC_TTA,
+        help="versões aumentadas por gravação na hora de codificar; 1 desliga",
+    )
+    ap.add_argument(
         "--sem-rodizios",
         action="store_true",
         help="pula a medição honesta e só treina o modelo final",
+    )
+    ap.add_argument(
+        "--so-rodizios",
+        action="store_true",
+        help="só mede: não treina o modelo final e não grava nada (ablação)",
     )
     args = ap.parse_args()
 
@@ -762,21 +844,24 @@ def main() -> None:
         amostras = restringir_ao_nucleo(amostras)
 
     hp = encoder.Hiperparametros(
+        dropout=args.dropout,
         com_velocidade=not args.sem_velocidade,
         z=args.z,
+        com_maos=config.ENC_MAOS_LOCAIS and not args.sem_maos,
     )
     dispositivo = (
         torch.device(args.dispositivo)
         if args.dispositivo
         else encoder.dispositivo_padrao()
     )
-    treino = dict(
-        epocas=args.epocas,
-        lote=args.lote,
-        taxa=args.taxa,
-        aumentar=not args.sem_aumento,
-        semente=args.semente,
-    )
+    treino = {
+        "epocas": args.epocas,
+        "lote": args.lote,
+        "taxa": args.taxa,
+        "aumentar": not args.sem_aumento,
+        "oclusao": args.oclusao,
+        "semente": args.semente,
+    }
 
     print(
         f"{len(amostras)} protótipos, {len(set(amostras.chaves))} sinais, "
@@ -784,7 +869,15 @@ def main() -> None:
     )
     print(f"entrada 32×{hp.dim_entrada} → embedding {hp.dimensao}d em {dispositivo.type}")
 
-    abertos = escolher_abertos(amostras.chaves, args.aberto)
+    # Com --treino-nucleo há 163 classes: reservar as 200 do padrão não deixaria
+    # nada para treinar, e o script morria pedindo um --aberto 0 que ele mesmo
+    # podia ter deduzido.
+    quantos_abertos = (
+        args.aberto
+        if args.aberto is not None
+        else (0 if args.treino_nucleo else config.VOCABULARIO_ABERTO)
+    )
+    abertos = escolher_abertos(amostras.chaves, quantos_abertos)
     chaves_indice = nucleo.CHAVES if no_nucleo else None
     inicio = time.time()
 
@@ -797,9 +890,21 @@ def main() -> None:
             hp,
             dispositivo,
             chaves_indice=chaves_indice,
+            amostras_amplas=todas_as_amostras if args.pre_epocas > 0 else None,
+            pre_epocas=args.pre_epocas,
+            tta=args.tta,
             **treino,
         )
     )
+
+    if args.so_rodizios:
+        # Ablação: o número honesto é o dos rodízios, e treinar o modelo final
+        # custaria um quarto treino que ninguém vai usar. Nada é gravado — nem
+        # o modelo, nem o índice, nem o relatório —, para que uma experiência
+        # não substitua em silêncio o que o app está usando.
+        todas = [p for r in rodizios for p in r.posicoes]
+        print(f"\n{'ABLAÇÃO':<16s} {avaliacao.agregar(todas)}")
+        return
 
     # O modelo que vai ser usado vê os três articuladores e todas as classes: no
     # app não existe articulador de fora, e deixar dado no chão só para manter
@@ -813,13 +918,30 @@ def main() -> None:
         amostras, list(range(len(amostras))), abertos=set()
     )
     final = treinar(
-        vetores, alvos, classes, hp, dispositivo, rotulo="final", **treino
+        vetores,
+        alvos,
+        classes,
+        hp,
+        dispositivo,
+        rotulo="final",
+        inicial=pre_treinar(
+            todas_as_amostras,
+            None,
+            set(),
+            hp,
+            dispositivo,
+            args.pre_epocas,
+            **{k: v for k, v in treino.items() if k != "epocas"},
+        )
+        if args.pre_epocas > 0
+        else None,
+        **treino,
     )
 
     encoder.salvar(final, args.modelo)
     Dicionario(
-        representacoes=encoder.codificar(
-            final, todas_as_amostras.vetores, dispositivo
+        representacoes=encoder.codificar_medio(
+            final, todas_as_amostras.vetores, args.tta, dispositivo=dispositivo
         ),
         rotulos=todas_as_amostras.rotulos,
         fontes=todas_as_amostras.fontes,
@@ -828,13 +950,14 @@ def main() -> None:
 
     segundos = time.time() - inicio
 
-    confiancas = [c for r in rodizios for c in r.confiancas]
-    if confiancas:
+    medidas = [c for r in rodizios for c in r.consultas]
+    if medidas:
         args.confiancas.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(
             args.confiancas,
-            distancias=np.array([d for d, _ in confiancas], dtype=np.float32),
-            acertou=np.array([c for _, c in confiancas], dtype=bool),
+            distancias=np.array([c.primeira for c in medidas], dtype=np.float32),
+            segundas=np.array([c.segunda for c in medidas], dtype=np.float32),
+            acertou=np.array([c.acertou for c in medidas], dtype=bool),
         )
         print(f"confianças dos rodízios salvas em {args.confiancas}")
 
@@ -863,7 +986,7 @@ def main() -> None:
 
     print(f"modelo salvo em {args.modelo}")
     print(f"dicionário de embeddings salvo em {args.embeddings}")
-    print(f"\no app usa o encoder automaticamente: python -m libras.app --sinais")
+    print("\no app usa o encoder automaticamente: python -m libras.app --sinais")
 
 
 if __name__ == "__main__":

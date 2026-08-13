@@ -24,11 +24,11 @@ from typing import Callable
 import cv2
 import numpy as np
 
-from . import config, desenho, nucleo, pose, sequencia, ui
+from . import config, desenho, nucleo, pose, rejeicao, sequencia, ui
 from .camera import Camera, CameraIndisponivel
 from .detector import DetectorSinais
 from .dicionario import FONTE_USUARIO, Dicionario
-from .segmenter import Estado, Segmentador
+from .segmenter import Segmentador
 
 ESC = 27
 TECLA_LIMPAR = ord("c")
@@ -171,11 +171,15 @@ def executar(apenas_nucleo: bool = True) -> int:
 
     dicionario = busca.dicionario
 
-    # O limiar foi calibrado com 163 sinais no índice. Com 1.364, o vizinho mais
-    # próximo é sempre mais próximo — o mesmo corte passaria a aceitar quase
-    # tudo, e um limiar frouxo é pior que nenhum: ele promete uma recusa que não
-    # acontece. Em `--tudo` a rejeição fica desligada e assumida como desligada.
-    limiar = config.limiar_de_rejeicao(dicionario.metrica) if apenas_nucleo else None
+    # Os limiares foram calibrados com 163 sinais no índice. Com 1.364, o vizinho
+    # mais próximo é sempre mais próximo — os mesmos cortes passariam a aceitar
+    # quase tudo, e um limiar frouxo é pior que nenhum: ele promete uma recusa
+    # que não acontece. Em `--tudo` a rejeição fica desligada e assumida assim.
+    limiares = (
+        config.limiares_de_rejeicao(dicionario.metrica)
+        if apenas_nucleo
+        else (None, None)
+    )
 
     try:
         camera = Camera()
@@ -191,7 +195,7 @@ def executar(apenas_nucleo: bool = True) -> int:
         segundos_maximo=config.SEGUNDOS_MAXIMO_SINAL,
     )
 
-    print(f"{len(dicionario.vocabulario)} sinais no dicionário "
+    print(f"{dicionario.sinais} sinais no dicionário "
           f"({len(dicionario)} protótipos, métrica {dicionario.metrica}"
           f"{', vocabulário núcleo' if apenas_nucleo else ', vocabulário inteiro'})")
     print(AJUDA)
@@ -249,9 +253,7 @@ def executar(apenas_nucleo: bool = True) -> int:
                         # não tem devolve os cinco mais parecidos com cara de
                         # resposta. Com 163 sinais no índice, o que está fora é a
                         # maioria do que existe.
-                        recusado = bool(candidatos) and (
-                            limiar is not None and candidatos[0].distancia > limiar
-                        )
+                        recusado = rejeicao.recusar(candidatos, *limiares)
                         if recusado:
                             candidatos = []
                         instante_resultado = agora

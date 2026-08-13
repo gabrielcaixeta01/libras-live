@@ -91,27 +91,21 @@ def desenhar_candidatos(
     A barra é uma medida relativa e nada mais — está escrito na tela. 0,81 não
     é "81% de chance de ser CASA", é "foi o mais perto, e por esta margem".
     Chamar isso de probabilidade seria mentir com um número bonito.
+
+    Lista vazia não passa por aqui: quem não tem o que mostrar chama
+    `desenhar_aviso`, porque "não reconheci" é uma resposta e merece o meio da
+    tela, não uma faixa vazia no rodapé.
     """
+    if not candidatos:
+        return
+
     altura, largura = frame.shape[:2]
     topo = altura - (len(candidatos) * ALTURA_LINHA) - 58
     faixa(frame, topo, altura, opacidade=0.7)
 
-    if not candidatos:
-        cv2.putText(
-            frame,
-            "nenhum sinal reconhecido",
-            (16, topo + 34),
-            FONTE,
-            0.7,
-            AMARELO,
-            2,
-            cv2.LINE_AA,
-        )
-    else:
-        for i, candidato in enumerate(candidatos):
-            y = topo + 28 + i * ALTURA_LINHA
-            primeiro = i == 0
-            _linha_de_candidato(frame, candidato, y, largura, primeiro)
+    for i, candidato in enumerate(candidatos):
+        y = topo + 28 + i * ALTURA_LINHA
+        _linha_de_candidato(frame, candidato, y, largura, primeiro=i == 0)
 
     cv2.putText(
         frame, ajuda, (16, altura - 14), FONTE, 0.45, CINZA, 1, cv2.LINE_AA

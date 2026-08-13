@@ -234,3 +234,102 @@ def test_caracteristicas_aceita_lote():
     lote = np.zeros((5, 32, pose.TAMANHO_VETOR), dtype=np.float32)
 
     assert sequencia.caracteristicas(lote).shape == (5, 32, 294)
+
+
+# --- configuração de mão ---
+
+
+def _com_maos(esquerda: np.ndarray, direita: np.ndarray) -> np.ndarray:
+    """(T, 147) com as duas mãos postas e o corpo zerado."""
+    pontos = np.zeros((len(esquerda), pose.NUM_PONTOS, 3), dtype=np.float32)
+    pontos[:, pose.MAO_ESQUERDA] = esquerda
+    pontos[:, pose.MAO_DIREITA] = direita
+    return pontos.reshape(len(esquerda), pose.TAMANHO_VETOR)
+
+
+def _mao_aberta(escala: float, deslocamento: float) -> np.ndarray:
+    """(1, 21, 3): uma mão de tamanho `escala`, posta em `deslocamento`."""
+    m = np.zeros((1, pose.NUM_PONTOS_MAO, 3), dtype=np.float32)
+    m[0, :, 0] = np.linspace(0.0, escala, pose.NUM_PONTOS_MAO)
+    m[0, :, 1] = np.linspace(0.0, escala / 2, pose.NUM_PONTOS_MAO)
+    return m + deslocamento
+
+
+def test_maos_locais_ignoram_onde_a_mao_esta_e_de_que_tamanho_ela_e():
+    """É o ponto do canal: a mesma mão perto e longe da câmera, em lugares
+    diferentes do corpo, tem que sair idêntica. Quem guarda o *onde* é a
+    posição, que continua na entrada ao lado deste."""
+    perto = _com_maos(_mao_aberta(0.3, 0.0), _mao_aberta(0.3, 0.0))
+    longe = _com_maos(_mao_aberta(0.15, 1.7), _mao_aberta(0.15, 1.7))
+
+    assert np.allclose(
+        sequencia.maos_locais(perto), sequencia.maos_locais(longe), atol=1e-5
+    )
+
+
+def test_maos_locais_separam_configuracoes_diferentes():
+    aberta = _com_maos(_mao_aberta(0.3, 0.0), _mao_aberta(0.3, 0.0))
+    torta = aberta.copy()
+    torta.reshape(1, pose.NUM_PONTOS, 3)[0, 5, 1] += 0.2
+
+    assert not np.allclose(
+        sequencia.maos_locais(aberta), sequencia.maos_locais(torta)
+    )
+
+
+def test_mao_ausente_sai_zerada_e_nao_dividida_por_quase_zero():
+    """`preparar` zera o ponto nunca visto. Dividir isso pela própria escala
+    transformaria ruído numérico em dedo."""
+    seq = _com_maos(
+        np.zeros((1, pose.NUM_PONTOS_MAO, 3), dtype=np.float32),
+        _mao_aberta(0.3, 0.0),
+    )
+    locais = sequencia.maos_locais(seq)
+
+    esquerda = locais[:, : sequencia.NUM_PONTOS_MAO_LOCAL * 3]
+    assert np.allclose(esquerda, 0.0)
+    assert np.isfinite(locais).all()
+
+
+def test_caracteristicas_acrescenta_os_canais_de_mao():
+    seq = np.zeros((32, pose.TAMANHO_VETOR), dtype=np.float32)
+
+    assert sequencia.caracteristicas(seq, com_maos=True).shape == (
+        32,
+        2 * pose.TAMANHO_VETOR + sequencia.TAMANHO_MAOS_LOCAIS,
+    )
+    assert sequencia.caracteristicas(
+        np.zeros((5, 32, pose.TAMANHO_VETOR), dtype=np.float32), com_maos=True
+    ).shape == (5, 32, 414)
+
+
+def test_maos_locais_saem_antes_do_z_e_sobrevivem_a_ele():
+    """O z-score apagaria a escala da mão junto com a do corpo. Os canais de mão
+    são calculados antes dele, de propósito."""
+    seq = _com_maos(_mao_aberta(0.3, 0.0), _mao_aberta(0.3, 0.5))
+
+    com_z = sequencia.caracteristicas(seq, com_maos=True, z=True)
+    sem_z = sequencia.caracteristicas(seq, com_maos=True, z=False)
+
+    assert np.allclose(
+        com_z[..., -sequencia.TAMANHO_MAOS_LOCAIS :],
+        sem_z[..., -sequencia.TAMANHO_MAOS_LOCAIS :],
+    )
+
+
+# --- imputação que não ultrapassa ---
+
+
+def test_imputacao_nao_sai_do_intervalo_medido():
+    """A cúbica natural disparava: um buraco longo entre dois valores próximos
+    saía com um pico de centenas de larguras de ombro, e o dicionário extraído
+    com ela tinha pontos a 218. PCHIP não tem como ultrapassar."""
+    seq = bruta(24)
+    medido = [0.0, 0.1, 0.0, -0.1] + [np.nan] * 16 + [0.2, 0.1, 0.0, -0.1]
+    seq[:, 0, 0] = medido
+
+    cheia = sequencia.imputar(seq)[:, 0, 0]
+
+    validos = [v for v in medido if np.isfinite(v)]
+    assert cheia.min() >= min(validos) - 1e-5
+    assert cheia.max() <= max(validos) + 1e-5

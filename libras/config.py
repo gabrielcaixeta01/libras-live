@@ -116,15 +116,30 @@ SEGUNDOS_MOSTRANDO = 4.0  # quanto tempo o resultado fica na tela
 # confiança, e enquanto ela for o único sinal disponível o limiar fica assim.
 REJEICAO_COSSENO: float | None = 0.4723
 
+# O segundo critério, e ele mede outra coisa: não "isto parece com alguma
+# coisa?" e sim "isto parece com **uma** coisa?". Um sinal que o dicionário não
+# tem cai no meio de vários protótipos parecidos e não destaca nenhum. Abaixo
+# desta diferença entre o primeiro e o segundo candidato, a lista é um empate e
+# o app recusa. Ver `libras/rejeicao.py` e o relatório do encoder.
+REJEICAO_MARGEM: float | None = None
+
 # A baseline DTW não tem limiar calibrado: a distância dela não tem a mesma
 # escala e o número que vale é o do encoder, que é o que o app usa. None desliga
 # a rejeição em vez de inventar um corte.
 REJEICAO_DTW: float | None = None
 
 
-def limiar_de_rejeicao(metrica: str) -> float | None:
-    """A distância acima da qual o app diz "não reconheci". None não rejeita nada."""
-    return {"cosseno": REJEICAO_COSSENO, "dtw": REJEICAO_DTW}.get(metrica)
+def limiares_de_rejeicao(metrica: str) -> tuple[float | None, float | None]:
+    """(corte de distância, corte de margem) para a métrica em uso.
+
+    None em qualquer um dos dois desliga aquele critério. Os dois desligados
+    significam que o app responde sempre — que é o que a baseline DTW faz.
+    """
+    if metrica == "cosseno":
+        return REJEICAO_COSSENO, REJEICAO_MARGEM
+    if metrica == "dtw":
+        return REJEICAO_DTW, None
+    return None, None
 
 # --- Encoder neural (training/train_sinais.py) ---
 # O número que o encoder existe para bater, medido pela baseline DTW no mesmo
@@ -160,6 +175,24 @@ ENC_AUG_ROTACAO_GRAUS = 8.0   # giro em torno do eixo vertical e do da câmera
 ENC_AUG_ESCALA = 0.10         # ±10% no tamanho aparente
 ENC_AUG_RUIDO = 0.015         # sigma, em larguras de ombro
 ENC_AUG_TEMPO = 0.20          # deformação do ritmo, mantendo começo e fim
+
+# Chance de apagar uma mão por um trecho, imitando o que o MediaPipe faz quando
+# ela cruza o corpo. **Medido e desligado**: 46,5% com 0,3 e 46,9% com 0,5,
+# contra 46,7% sem — os três dentro do ruído de semente, que é ±1,3 ponto neste
+# protocolo. Fica em zero porque um aumento que não compra nada só custa tempo
+# de treino; a `--oclusao` do train_sinais liga de volta para quem quiser medir.
+ENC_AUG_OCLUSAO = 0.0
+
+# A configuração de mão em escala própria, como canal extra da entrada — ver
+# `sequencia.maos_locais`. É a única mudança de representação que passou do
+# ruído por margem larga. Fica aqui, e não no padrão de `Hiperparametros`,
+# porque o padrão de lá precisa continuar descrevendo os modelos já gravados.
+ENC_MAOS_LOCAIS = True
+
+# Quantas versões aumentadas da mesma gravação entram na média do embedding —
+# ver `encoder.codificar_medio`. Também medido e desligado: 47,1% contra 46,7%,
+# dentro do ruído, e custa 5 passadas pelo encoder por consulta. 1 desliga.
+ENC_TTA = 1
 
 # Vocabulário aberto: sinais retirados do treino do encoder que entram só como
 # protótipo. É o que mede a promessa "adiciono um sinal novo com uma gravação".

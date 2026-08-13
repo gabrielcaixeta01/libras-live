@@ -101,10 +101,16 @@ class Dicionario:
     # --- busca ---
 
     def buscar(self, consulta: np.ndarray, k: int = 5) -> list[Candidato]:
-        """Os `k` sinais mais próximos, um por rótulo, do mais para o menos provável.
+        """Os `k` sinais mais próximos, um por sinal, do mais para o menos provável.
 
-        Cada rótulo aparece uma vez só, com a distância do seu melhor protótipo:
+        Cada sinal aparece uma vez só, com a distância do seu melhor protótipo:
         dois articuladores da mesma palavra não podem ocupar duas linhas da tela.
+
+        A identidade é `catalogo.chave`, e não o rótulo cru. `AVÓ` e `AVÔ` são
+        dois rótulos do V-LIBRASIL para o mesmo sinal — agrupar por rótulo
+        gastaria duas das cinco linhas com a mesma resposta, que é o inverso do
+        que a lista existe para fazer. O rótulo mostrado é o do protótipo que
+        venceu.
         """
         if len(self) == 0 or k < 1:
             return []
@@ -113,22 +119,23 @@ class Dicionario:
             METRICAS[self.metrica](consulta, self._representacoes), dtype=np.float64
         )
 
-        melhor_por_rotulo: dict[str, int] = {}
+        melhor_por_sinal: dict[str, int] = {}
         for i, rotulo in enumerate(self._rotulos):
-            atual = melhor_por_rotulo.get(rotulo)
+            chave = catalogo.chave(rotulo)
+            atual = melhor_por_sinal.get(chave)
             if atual is None or distancias[i] < distancias[atual]:
-                melhor_por_rotulo[rotulo] = i
+                melhor_por_sinal[chave] = i
 
-        ordenados = sorted(melhor_por_rotulo.items(), key=lambda par: distancias[par[1]])
+        ordenados = sorted(melhor_por_sinal.values(), key=lambda i: distancias[i])
 
         return [
             Candidato(
-                rotulo=rotulo,
+                rotulo=self._rotulos[i],
                 distancia=float(distancias[i]),
                 similaridade=_similaridade(float(distancias[i])),
                 fonte=self._fontes[i],
             )
-            for rotulo, i in ordenados[:k]
+            for i in ordenados[:k]
         ]
 
     # --- re-ancoragem ---
@@ -176,7 +183,17 @@ class Dicionario:
 
     @property
     def vocabulario(self) -> list[str]:
+        """Os rótulos distintos, como estão escritos. Para exibir e para conferir."""
         return sorted(set(self._rotulos))
+
+    @property
+    def sinais(self) -> int:
+        """Quantos sinais **distintos** — a contagem que a busca de fato promete.
+
+        Menor que `len(vocabulario)` quando dois rótulos são o mesmo sinal, e é
+        este o número honesto: é o que a lista de candidatos pode devolver.
+        """
+        return len({catalogo.chave(r) for r in self._rotulos})
 
     @property
     def fontes(self) -> list[str]:
@@ -201,7 +218,7 @@ class Dicionario:
         """A fonte de **cada** protótipo, na ordem. `fontes` é o conjunto delas."""
         return list(self._fontes)
 
-    def separar_fonte(self, fonte: str) -> tuple["Dicionario", list[tuple]]:
+    def separar_fonte(self, fonte: str) -> tuple[Dicionario, list[tuple]]:
         """Divide em (dicionário sem a fonte, consultas daquela fonte).
 
         É a operação que o leave-one-articulator-out precisa e a única forma
@@ -215,7 +232,7 @@ class Dicionario:
         consultas = [(self._representacoes[i], self._rotulos[i]) for i in fora]
         return self._subconjunto(dentro), consultas
 
-    def restringir(self, chaves: Iterable[str]) -> "Dicionario":
+    def restringir(self, chaves: Iterable[str]) -> Dicionario:
         """O dicionário reduzido a um vocabulário — o que sustenta o núcleo.
 
         Com 1.363 sinais no índice a resposta certa aparece em 7,5% das
@@ -230,11 +247,11 @@ class Dicionario:
             i for i, r in enumerate(self._rotulos) if catalogo.chave(r) in alvo
         )
 
-    def apenas(self, fonte: str) -> "Dicionario":
+    def apenas(self, fonte: str) -> Dicionario:
         """Só os protótipos de uma fonte — é o que se grava em disco ao sair."""
         return self._subconjunto([i for i, f in enumerate(self._fontes) if f == fonte])
 
-    def juntar(self, outro: "Dicionario") -> "Dicionario":
+    def juntar(self, outro: Dicionario) -> Dicionario:
         """Empilha dois dicionários. O da direita entra depois, na mesma métrica."""
         if outro.metrica != self.metrica:
             raise ValueError(
@@ -254,7 +271,7 @@ class Dicionario:
             metrica=self.metrica,
         )
 
-    def _subconjunto(self, indices) -> "Dicionario":
+    def _subconjunto(self, indices) -> Dicionario:
         indices = list(indices)
         return Dicionario(
             representacoes=self._representacoes[indices],
@@ -277,7 +294,7 @@ class Dicionario:
         )
 
     @classmethod
-    def carregar(cls, caminho: str | Path) -> "Dicionario":
+    def carregar(cls, caminho: str | Path) -> Dicionario:
         dados = np.load(Path(caminho), allow_pickle=False)
         return cls(
             representacoes=dados["representacoes"],

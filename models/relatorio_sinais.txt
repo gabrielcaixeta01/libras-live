@@ -7,23 +7,23 @@ protótipos ............... 4086
 sinais distintos ......... 1363
 gravações por sinal ...... 3.00
 articuladores ............ articulador_1, articulador_2, articulador_3
-tempo de avaliação ....... 4.1 min
+tempo de avaliação ....... 4.5 min
 
 ------------------------------------------------------------------------
 RODÍZIOS
 ------------------------------------------------------------------------
 
-  sem articulador_1  1364 consultas   recall@1   2.2%   recall@5   6.5%   MRR   3.7%
-  sem articulador_2  1360 consultas   recall@1   3.3%   recall@5   8.8%   MRR   5.2%
-  sem articulador_3  1362 consultas   recall@1   3.2%   recall@5   7.1%   MRR   4.5%
-  TOTAL             4086 consultas   recall@1   2.9%   recall@5   7.5%   MRR   4.4%
+  sem articulador_1  1364 consultas   recall@1   2.3%   recall@5   6.2%   MRR   3.7%
+  sem articulador_2  1360 consultas   recall@1   3.6%   recall@5   8.6%   MRR   5.3%
+  sem articulador_3  1362 consultas   recall@1   3.3%   recall@5   6.8%   MRR   4.5%
+  TOTAL             4086 consultas   recall@1   3.1%   recall@5   7.2%   MRR   4.5%
 
 ------------------------------------------------------------------------
 LEITURA
 ------------------------------------------------------------------------
 
-A resposta certa aparece na tela em 7.5% das consultas.
-Ela vem em primeiro lugar em 2.9%.
+A resposta certa aparece na tela em 7.2% das consultas.
+Ela vem em primeiro lugar em 3.1%.
 
 recall@5 é a métrica do produto: a tela mostra cinco candidatos, e um
 dicionário em que você reconhece a palavra certa entre cinco funciona.

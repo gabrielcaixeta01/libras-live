@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import PchipInterpolator
 
 from . import pose
 
@@ -70,10 +70,18 @@ def validade(bruta: np.ndarray) -> np.ndarray:
 def imputar(bruta: np.ndarray) -> np.ndarray:
     """Preenche os NaN interpolando cada coordenada ao longo do tempo.
 
-    Spline cúbica quando há apoio suficiente, linear quando não há, e o valor
-    da borda quando o buraco está nas pontas — **nunca extrapolação**. Spline
-    cúbica extrapolada dispara para longe em poucos frames, e uma mão inventada
-    a dois metros do corpo estraga toda distância que ela tocar.
+    Cúbica de Hermite (PCHIP) quando há apoio suficiente, linear quando não há,
+    e o valor da borda quando o buraco está nas pontas — **nunca extrapolação**.
+
+    **PCHIP e não `CubicSpline`, e a diferença não é estética.** A cúbica natural
+    é global: ela casa a segunda derivada entre os trechos, e para conseguir isso
+    através de um buraco longo ela dispara para fora do intervalo medido. O
+    dicionário extraído com ela tinha pontos a **218 larguras de ombro** do
+    corpo, quando um braço aberto chega a 1,5 — a mão sumia atrás do tronco por
+    meio segundo e a spline preenchia o buraco com uma parábola gigante. PCHIP é
+    a mesma família de cúbicas, mas preserva a forma: dentro de um buraco ela
+    fica entre os dois valores que o delimitam, por construção. Não há
+    ultrapassagem possível.
 
     Canal sem nenhum valor válido vira zero: não há de onde interpolar, e o
     importante passa a ser que a ausência tenha sempre a *mesma* forma, para que
@@ -103,7 +111,7 @@ def imputar(bruta: np.ndarray) -> np.ndarray:
 
         indices = np.flatnonzero(ok)
         if len(indices) >= MINIMO_PARA_SPLINE:
-            spline = CubicSpline(indices, coluna[indices], extrapolate=False)
+            spline = PchipInterpolator(indices, coluna[indices], extrapolate=False)
             preenchido = spline(tempo)
             # Fora do intervalo medido a spline devolve NaN; seguramos a borda.
             preenchido[: indices[0]] = coluna[indices[0]]
@@ -189,34 +197,96 @@ def normalizar_z(vetores: np.ndarray, eps: float = 1e-6) -> np.ndarray:
     )
 
 
+# A escala de cada mão: do pulso à base do dedo médio. É a medida que menos
+# depende de a mão estar aberta ou fechada — os dedos dobram, a palma não.
+_MCP_MEDIO = 9
+ESCALA_MAO_MINIMA = 1e-3  # abaixo disso não há mão, há um ponto imputado a zero
+
+# Pontos por mão depois de tirar o pulso, que vira a origem e seria zero fixo.
+NUM_PONTOS_MAO_LOCAL = pose.NUM_PONTOS_MAO - 1
+TAMANHO_MAOS_LOCAIS = 2 * NUM_PONTOS_MAO_LOCAL * 3  # 120
+
+
+def maos_locais(vetores: np.ndarray) -> np.ndarray:
+    """(..., T, 147) → (..., T, 120): a **configuração de mão**, em escala própria.
+
+    Este é o canal que a âncora no corpo apaga. Normalizado pela largura dos
+    ombros, o punho percorre mais de uma unidade ao longo de um sinal enquanto um
+    dedo se move 0,03 — medido no dicionário, a variância dos canais da mão é
+    duas ordens de grandeza menor que a da trajetória. A rede vê a trajetória e
+    quase não vê a mão, e configuração de mão é fonema em Libras: SABER e
+    COMPREENDER acontecem no mesmo lugar da testa e diferem pelos dedos.
+
+    Aqui cada mão volta a ser o que `alfabeto.landmarks.normalizar` faz para uma
+    letra: pulso na origem, escala própria. É a mesma informação da fase 1
+    entrando como canal extra, e de graça — sai da geometria já extraída, sem
+    reprocessar vídeo nenhum.
+
+    Mão que não apareceu em frame nenhum chega aqui zerada e sai zerada: não há
+    escala para dividir, e inventar uma faria ruído virar dedo.
+    """
+    v = np.asarray(vetores, dtype=np.float32)
+    if v.shape[-1] != pose.TAMANHO_VETOR:
+        raise ValueError(f"esperado (..., T, 147), recebido {v.shape}")
+
+    pontos = v.reshape(*v.shape[:-1], pose.NUM_PONTOS, 3)
+    saidas = []
+
+    for fatia in (pose.MAO_ESQUERDA, pose.MAO_DIREITA):
+        mao = pontos[..., fatia, :]
+        local = mao[..., 1:, :] - mao[..., :1, :]
+
+        escala = np.linalg.norm(
+            mao[..., _MCP_MEDIO, :2] - mao[..., 0, :2], axis=-1
+        )[..., None, None]
+        local = np.where(escala > ESCALA_MAO_MINIMA, local / np.maximum(escala, ESCALA_MAO_MINIMA), 0.0)
+
+        saidas.append(local.reshape(*v.shape[:-1], NUM_PONTOS_MAO_LOCAL * 3))
+
+    return np.concatenate(saidas, axis=-1, dtype=np.float32)
+
+
 def caracteristicas(
     vetores: np.ndarray,
     com_velocidade: bool = True,
     z: bool = False,
+    com_maos: bool = False,
     limite: float = LIMITE_PLAUSIVEL,
 ) -> np.ndarray:
-    """(..., T, 147) → (..., T, 147 ou 294): o que entra no encoder.
+    """(..., T, 147) → (..., T, D): o que entra no encoder.
 
     Sempre limita a amplitude primeiro, porque tudo o que vem depois — a
-    velocidade, o z-score, a rede — é sensível a um ponto inventado a 400
-    larguras de ombro do corpo.
+    velocidade, o z-score, a rede — é sensível a um ponto inventado longe do
+    corpo.
 
     Args:
         vetores: sequência já normalizada no corpo, de `Sequencia.vetores`.
         com_velocidade: concatena a derivada temporal como canais extras.
         z: aplica `normalizar_z` na posição. Ver lá o que isso custa.
+        com_maos: concatena `maos_locais` — a configuração de mão em escala
+            própria, que a normalização no corpo deixa pequena demais para ser
+            vista. A **derivada** desses canais foi medida e não entra: 41,0%
+            de recall@5 contra 44,8% sem ela. Duplicar a largura da entrada com
+            2 gravações por classe custa mais do que o dedo em movimento paga.
         limite: amplitude máxima aceita, em larguras de ombro.
     """
     v = np.clip(np.asarray(vetores, dtype=np.float32), -limite, limite)
+
+    # Antes do z-score, que apagaria a escala de cada mão junto com a do corpo.
+    locais = maos_locais(v) if com_maos else None
+
     if z:
         v = normalizar_z(v)
 
-    if not com_velocidade:
-        return v
+    canais = [v]
+    if com_velocidade:
+        canais.append(np.clip(velocidade(v), -limite, limite))
+    if locais is not None:
+        canais.append(np.clip(locais, -limite, limite))
 
-    return np.concatenate(
-        [v, np.clip(velocidade(v), -limite, limite)], axis=-1, dtype=np.float32
-    )
+    if len(canais) == 1:
+        return canais[0]
+    return np.concatenate(canais, axis=-1, dtype=np.float32)
 
 
 def preparar(

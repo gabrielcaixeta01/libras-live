@@ -834,11 +834,12 @@ libras/
   app.py           só o CLI: lê os argumentos e escolhe o modo
   app_sinais.py    o laço do dicionário reverso
   pose.py          os 49 pontos e a normalização ancorada no corpo
-  sequencia.py     imputação por spline, reamostragem, validade
+  sequencia.py     imputação PCHIP, reamostragem, validade, canais de mão
   segmenter.py     quando um sinal começa e quando acaba
   dtw.py           distância com alinhamento temporal, em lote
   encoder.py       GRU bidirecional → embedding 256d (único lugar com torch)
   dicionario.py    protótipos, busca top-5, re-ancoragem, recorte de vocabulário
+  rejeicao.py      quando dizer "não reconheci", e a calibração dos dois cortes
   nucleo.py        os 163 sinais que o dicionário promete acertar
   avaliacao.py     recall@1/@5, MRR, leave-one-articulator-out
   catalogo.py      rótulo e articulador a partir do caminho do vídeo
@@ -920,7 +921,8 @@ Do modo sinais:
 | `SEGUNDOS_MAXIMO_SINAL` | 4,0 | corta em vez de gravar para sempre |
 | `CANDIDATOS_NA_TELA` | 5 | quantas palavras a busca devolve |
 | `BANDA_DTW` | 0,2 | desvio máximo da diagonal no alinhamento |
-| `REJEICAO_COSSENO` | 0,4723 | acima disto o app diz "não reconheci"; `None` desliga |
+| `REJEICAO_COSSENO` | ver `config.py` | acima desta distância o app diz "não reconheci"; `None` desliga |
+| `REJEICAO_MARGEM` | ver `config.py` | abaixo desta diferença entre o 1º e o 2º candidato, a lista é um empate e o app recusa |
 
 Do encoder neural:
 
@@ -932,10 +934,13 @@ Do encoder neural:
 | `ENC_EPOCAS` | 60 | épocas por rodízio |
 | `ARCFACE_MARGEM` | 0,30 | folga angular exigida; sobe de 0 no primeiro terço |
 | `ARCFACE_ESCALA` | 32,0 | dureza do softmax sobre a esfera |
+| `ENC_MAOS_LOCAIS` | `True` | a configuração de mão em escala própria como canal extra |
 | `ENC_AUG_*` | — | rotação, escala, ruído e deformação de ritmo do aumento |
+| `ENC_AUG_OCLUSAO` | 0,0 | apagar uma mão por um trecho; medido e desligado |
+| `ENC_TTA` | 1 | versões aumentadas por gravação ao codificar; medido e desligado |
 | `VOCABULARIO_ABERTO` | 200 | sinais fora do treino, medidos à parte |
-| `BASELINE_DTW_RECALL5` | 0,075 | o número a bater no vocabulário inteiro |
-| `BASELINE_DTW_NUCLEO_RECALL5` | 0,214 | o número a bater no núcleo |
+| `BASELINE_DTW_RECALL5` | ver `config.py` | o número a bater no vocabulário inteiro |
+| `BASELINE_DTW_NUCLEO_RECALL5` | ver `config.py` | o número a bater no núcleo |
 
 O vocabulário núcleo em si é uma lista, não um parâmetro: está em
 [`libras/nucleo.py`](libras/nucleo.py), agrupado por tema. Acrescentar uma

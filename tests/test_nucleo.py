@@ -118,13 +118,16 @@ def test_restringir_preserva_a_metrica():
 
 
 def test_limiar_por_metrica():
-    assert config.limiar_de_rejeicao("cosseno") == config.REJEICAO_COSSENO
-    assert config.limiar_de_rejeicao("dtw") == config.REJEICAO_DTW
+    assert config.limiares_de_rejeicao("cosseno") == (
+        config.REJEICAO_COSSENO,
+        config.REJEICAO_MARGEM,
+    )
+    assert config.limiares_de_rejeicao("dtw") == (config.REJEICAO_DTW, None)
 
 
 def test_metrica_desconhecida_nao_rejeita():
     """None desliga a rejeição; inventar um corte seria pior que não ter."""
-    assert config.limiar_de_rejeicao("inexistente") is None
+    assert config.limiares_de_rejeicao("inexistente") == (None, None)
 
 
 # --- contra o dicionário de verdade ---

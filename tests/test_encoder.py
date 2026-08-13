@@ -95,6 +95,37 @@ def test_entrada_dobra_de_largura_com_a_velocidade():
     assert encoder.entrada_do_modelo(sequencias(), hp).shape[-1] == 147
 
 
+def test_os_canais_de_mao_entram_na_largura_declarada():
+    """`dim_entrada` é o que dimensiona a primeira camada. Se ele mentir sobre o
+    que `entrada_do_modelo` produz, a rede nem constrói."""
+    hp = encoder.Hiperparametros(com_maos=True)
+
+    assert hp.dim_entrada == 2 * pose.TAMANHO_VETOR + sequencia.TAMANHO_MAOS_LOCAIS
+    assert encoder.entrada_do_modelo(sequencias(), hp).shape[-1] == hp.dim_entrada
+
+
+def test_um_pt_antigo_carrega_sem_os_canais_de_mao(tmp_path):
+    """`Hiperparametros(**dados)` de um `.pt` gravado antes do campo tem que dar
+    o modelo de antes, e não um com a entrada maior que os pesos."""
+    assert encoder.Hiperparametros().com_maos is False
+
+    antigo = {"dimensao": 16, "oculto": 8, "camadas": 1, "dropout": 0.0}
+    assert encoder.Hiperparametros(**antigo).dim_entrada == 2 * pose.TAMANHO_VETOR
+
+
+def test_modelo_com_maos_faz_ida_e_volta(tmp_path):
+    modelo = modelo_pequeno(com_maos=True)
+    lote = sequencias()
+    antes = encoder.codificar(modelo, lote)
+
+    caminho = tmp_path / "encoder.pt"
+    encoder.salvar(modelo, caminho)
+    recarregado = encoder.carregar(caminho, torch.device("cpu"))
+
+    assert recarregado.hp.com_maos is True
+    assert np.allclose(encoder.codificar(recarregado, lote), antes, atol=1e-5)
+
+
 # --- persistência ---
 
 
@@ -203,6 +234,89 @@ def test_o_aumento_nao_espelha_o_sinalizante():
         variado = encoder.aumentar(pontos.reshape(8, -1), rng).reshape(8, 49, 3)
         assert variado[:, pose.MAO_ESQUERDA, 0].mean() < 0
         assert variado[:, pose.MAO_DIREITA, 0].mean() > 0
+
+
+def test_a_oclusao_apaga_uma_mao_e_deixa_a_outra():
+    """A mão que o MediaPipe perde some por um trecho, não a gravação inteira e
+    nunca as duas — se as duas somem não sobra sinal nenhum para aprender."""
+    rng = np.random.default_rng(3)
+    pontos = np.zeros((16, pose.NUM_PONTOS, 3), dtype=np.float32)
+    pontos[:, pose.MAO_ESQUERDA, 0] = np.linspace(0, 1, 16)[:, None]
+    pontos[:, pose.MAO_DIREITA, 1] = np.linspace(0, 1, 16)[:, None]
+    plano = pontos.reshape(16, -1)
+
+    mudou_esquerda = mudou_direita = 0
+    for _ in range(60):
+        variado = encoder.aumentar(
+            plano, rng, rotacao_graus=0, escala=0, ruido=0, tempo=0, oclusao=1.0
+        ).reshape(16, 49, 3)
+        e = not np.allclose(variado[:, pose.MAO_ESQUERDA], pontos[:, pose.MAO_ESQUERDA])
+        d = not np.allclose(variado[:, pose.MAO_DIREITA], pontos[:, pose.MAO_DIREITA])
+        assert not (e and d), "uma mão por vez"
+        mudou_esquerda += e
+        mudou_direita += d
+
+    assert mudou_esquerda and mudou_direita
+
+
+def test_sem_oclusao_o_aumento_nao_toca_nas_maos():
+    rng = np.random.default_rng(3)
+    plano = sequencias(1)[0]
+
+    for _ in range(20):
+        variado = encoder.aumentar(
+            plano, rng, rotacao_graus=0, escala=0, ruido=0, tempo=0, oclusao=0.0
+        )
+        assert np.allclose(variado, plano, atol=1e-5)
+
+
+def test_a_oclusao_preenche_o_buraco_entre_as_bordas_em_vez_de_zerar():
+    """Zerar ensinaria um padrão que a rede nunca vai ver: o que chega até ela
+    sempre passou por `sequencia.imputar`."""
+    rng = np.random.default_rng(1)
+    # Mão parada e longe de zero: apagá-la tem que devolver ela mesma — a
+    # interpolação entre duas bordas iguais é a borda —, e zerá-la apareceria.
+    plano = np.full((12, pose.TAMANHO_VETOR), 1.0, dtype=np.float32)
+
+    for _ in range(30):
+        variado = encoder.aumentar(
+            plano, rng, rotacao_graus=0, escala=0, ruido=0, tempo=0, oclusao=1.0
+        )
+        assert np.allclose(variado, 1.0, atol=1e-5)
+
+
+# --- média de codificações ---
+
+
+def test_a_media_de_codificacoes_volta_para_a_esfera():
+    modelo = modelo_pequeno()
+    lote = sequencias()
+
+    media = encoder.codificar_medio(modelo, lote, repeticoes=4)
+
+    assert media.shape == (len(lote), modelo.hp.dimensao)
+    assert np.allclose(np.linalg.norm(media, axis=1), 1.0, atol=1e-5)
+
+
+def test_uma_repeticao_e_a_codificacao_crua():
+    modelo = modelo_pequeno()
+    lote = sequencias()
+
+    assert np.allclose(
+        encoder.codificar_medio(modelo, lote, repeticoes=1),
+        encoder.codificar(modelo, lote),
+    )
+
+
+def test_a_media_e_reprodutivel_e_aceita_uma_sequencia_so():
+    modelo = modelo_pequeno()
+    uma = sequencias(1)[0]
+
+    primeira = encoder.codificar_medio(modelo, uma, repeticoes=3, semente=5)
+    segunda = encoder.codificar_medio(modelo, uma, repeticoes=3, semente=5)
+
+    assert primeira.shape == (modelo.hp.dimensao,)
+    assert np.allclose(primeira, segunda)
 
 
 # --- dispositivo ---

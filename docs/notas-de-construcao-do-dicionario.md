@@ -115,6 +115,44 @@ articuladores têm distância intra-sinal quase igual (2,79 / 2,93 / 2,90).
 robusta vem antes da primeira hipótese. Quase gastei uma re-extração de uma hora
 consertando um bug que não existia.
 
+**Adendo, 12 de agosto.** A mediana escondeu o outlier, e por isso a pergunta
+"de onde vêm os ±400?" ficou sem resposta por um dia. Vinham de um bug real —
+ver a seção seguinte. A estatística robusta salvou o diagnóstico *daquela*
+hipótese e adiou o diagnóstico da certa.
+
+### Os ±400 eram a spline, e não o dado
+
+A pergunta que a mediana adiou tem resposta simples. `sequencia.imputar`
+preenchia os buracos com `scipy.interpolate.CubicSpline` — a cúbica **natural**,
+que é global: ela casa a segunda derivada entre os trechos, e para conseguir isso
+através de um buraco longo ela sai do intervalo dos valores que o delimitam.
+
+O buraco longo é o caso comum, não o raro: a mão cruza o corpo, o HandLandmarker
+a perde por meio segundo, e a spline preenche quinze frames com uma parábola
+gigante. Um braço aberto chega a 1,5 largura de ombro. O dicionário tinha pontos
+a **417**.
+
+A troca por `PchipInterpolator` — a mesma família de cúbicas, mas preservando a
+forma — resolve por construção: dentro de um buraco, PCHIP fica entre os dois
+valores que o delimitam. Não há ultrapassagem possível. Medido sobre a mesma
+base:
+
+| | CubicSpline | PCHIP |
+|---|---|---|
+| amplitude máxima | 417,7 | **5,8** |
+| gravações com algum \|x\| > 5 | 4,38% | **1,25%** |
+
+O `LIMITE_PLAUSIVEL` de `caracteristicas` limitava a **amplitude** em ±5 e
+salvava a rede de um valor absurdo dominar a entrada — mas não salvava a
+**forma**: dentro do buraco a trajetória continuava sendo a de uma parábola
+inventada, e os canais de configuração de mão, que dividem pela escala da
+própria mão, herdavam a invenção inteira. A baseline DTW não tinha nem o corte:
+ela consumia os 417 diretamente.
+
+**Lição:** um corte de amplitude é um curativo sobre um valor, não sobre um
+processo. Quando um número impossível aparece no dado, ele tem uma causa, e o
+lugar de consertá-lo é onde ele nasce.
+
 ### Um Ctrl-C descartava trabalho em três lugares
 
 Encontrados ao revisar os laços, todos da mesma família — estado que só existe
