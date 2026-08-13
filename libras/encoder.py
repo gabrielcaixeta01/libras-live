@@ -69,11 +69,18 @@ class Hiperparametros:
     # errado daria um encoder que carrega e devolve embedding sem sentido. Quem
     # treina hoje passa `config.ENC_MAOS_LOCAIS` explicitamente.
     com_maos: bool = False
+    # Mesmo motivo do campo acima: falso por padrão para que um `.pt` anterior a
+    # ele continue carregando com o significado que tinha quando foi gravado.
+    com_validade: bool = False
 
     @property
     def dim_entrada(self) -> int:
         posicao = pose.TAMANHO_VETOR * (2 if self.com_velocidade else 1)
-        return posicao + (sequencia.TAMANHO_MAOS_LOCAIS if self.com_maos else 0)
+        return (
+            posicao
+            + (sequencia.TAMANHO_MAOS_LOCAIS if self.com_maos else 0)
+            + (sequencia.NUM_GRUPOS_VALIDADE if self.com_validade else 0)
+        )
 
 
 class Codificador(nn.Module):
@@ -169,21 +176,26 @@ def aumentar(
     tempo: float = config.ENC_AUG_TEMPO,
     oclusao: float = config.ENC_AUG_OCLUSAO,
 ) -> np.ndarray:
-    """Uma variação plausível da mesma gravação. (T, 147) → (T, 147).
+    """Uma variação plausível da mesma gravação. (T, D) → (T, D), D em {147, 196}.
 
     Cinco transformações, todas escolhidas por corresponderem a algo que muda
     de verdade entre duas gravações do mesmo sinal: o ângulo da câmera, o
     tamanho aparente da pessoa, o erro do landmark, o ritmo e **a mão que o
     MediaPipe perde**.
 
+    A máscara de validade, quando vem junto, é aumentada **com** a geometria e
+    não ao lado dela: a oclusão que apaga uma mão também marca aqueles pontos
+    como não medidos, e a deformação temporal reamostra os dois pela mesma
+    grade. Uma máscara que descrevesse outro instante do sinal seria pior que
+    máscara nenhuma.
+
     **Sem espelhamento**, de propósito. No alfabeto trocar de mão dá a mesma
     letra; aqui o lado é fonema, e espelhar geraria um sinal diferente com o
     rótulo antigo. A `--canhoto` do `prepare_sinais` existe para canonizar
     lateralidade uma vez, não para inventá-la aqui.
     """
-    pontos = np.asarray(vetores, dtype=np.float32).reshape(
-        len(vetores), pose.NUM_PONTOS, 3
-    )
+    geometria, mascara = sequencia.separar_validade(vetores)
+    pontos = geometria.reshape(len(geometria), pose.NUM_PONTOS, 3)
 
     girado = pontos @ _rotacao(
         rng.uniform(-rotacao_graus, rotacao_graus),
@@ -194,14 +206,24 @@ def aumentar(
     if ruido > 0:
         girado += rng.normal(0.0, ruido, size=girado.shape).astype(np.float32)
 
-    girado = _ocultar_mao(girado, rng, oclusao)
+    girado, mascara = _ocultar_mao(girado, mascara, rng, oclusao)
 
-    return _deformar_tempo(girado, rng, tempo).reshape(len(vetores), -1)
+    achatado = girado.reshape(len(girado), -1)
+    if mascara is not None:
+        achatado = np.concatenate([achatado, mascara], axis=-1, dtype=np.float32)
+
+    # A deformação temporal é interpolação linear por canal, então geometria e
+    # máscara podem passar pela mesma chamada — o que garante, e não só espera,
+    # que as duas sofram exatamente a mesma grade.
+    return _deformar_tempo(achatado, rng, tempo)
 
 
 def _ocultar_mao(
-    pontos: np.ndarray, rng: np.random.Generator, probabilidade: float
-) -> np.ndarray:
+    pontos: np.ndarray,
+    mascara: np.ndarray | None,
+    rng: np.random.Generator,
+    probabilidade: float,
+) -> tuple[np.ndarray, np.ndarray | None]:
     """Apaga uma das mãos por um trecho, e preenche o buraco como o pipeline faria.
 
     É o aumento que corresponde à falha mais comum da medição real: a mão cruza
@@ -212,11 +234,12 @@ def _ocultar_mao(
 
     O buraco é preenchido por interpolação linear entre as bordas, e não zerado:
     zerar ensinaria a rede a reconhecer um padrão que ela nunca vai ver, já que
-    o que chega até ela sempre passou pela imputação.
+    o que chega até ela sempre passou pela imputação. A máscara, essa sim, vai a
+    zero no trecho — é ela que existe para dizer que ali ninguém mediu nada.
     """
     t = len(pontos)
     if probabilidade <= 0 or t < 4 or rng.random() >= probabilidade:
-        return pontos
+        return pontos, mascara
 
     fatia = pose.MAO_ESQUERDA if rng.random() < 0.5 else pose.MAO_DIREITA
     duracao = int(rng.integers(2, max(3, t // 2)))
@@ -236,7 +259,14 @@ def _ocultar_mao(
             + borda_b[None] * pesos[:, None, None]
         )
 
-    return saida
+    if mascara is None:
+        return saida, None
+
+    # `inicio:fim` cobre os três ramos acima: quando `fim >= t` o numpy já para
+    # no fim do array, que é exatamente o trecho que a geometria alterou.
+    marcada = mascara.copy()
+    marcada[inicio:fim, fatia] = 0.0
+    return saida, marcada
 
 
 def _rotacao(graus_y: float, graus_z: float) -> np.ndarray:
@@ -293,9 +323,13 @@ def dispositivo_padrao() -> torch.device:
 
 
 def entrada_do_modelo(vetores: np.ndarray, hp: Hiperparametros) -> np.ndarray:
-    """(..., T, 147) → (..., T, dim_entrada), do jeito que este modelo espera."""
+    """(..., T, 147 ou 196) → (..., T, dim_entrada), como este modelo espera."""
     return sequencia.caracteristicas(
-        vetores, com_velocidade=hp.com_velocidade, z=hp.z, com_maos=hp.com_maos
+        vetores,
+        com_velocidade=hp.com_velocidade,
+        z=hp.z,
+        com_maos=hp.com_maos,
+        com_validade=hp.com_validade,
     )
 
 

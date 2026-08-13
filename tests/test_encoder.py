@@ -324,3 +324,109 @@ def test_a_media_e_reprodutivel_e_aceita_uma_sequencia_so():
 
 def test_dispositivo_padrao_e_cpu_ou_mps():
     assert encoder.dispositivo_padrao().type in {"cpu", "mps"}
+
+
+# --- a máscara de validade atravessando o aumento ---
+
+
+def sequencia_com_mascara(t: int = 16) -> np.ndarray:
+    """(T, 196) com tudo medido: a máscara só pode piorar a partir daqui."""
+    geometria = np.full((t, pose.TAMANHO_VETOR), 0.3, dtype=np.float32)
+    mascara = np.ones((t, sequencia.TAMANHO_VALIDADE), dtype=np.float32)
+    return np.concatenate([geometria, mascara], axis=-1, dtype=np.float32)
+
+
+def test_o_aumento_preserva_a_largura_com_mascara():
+    rng = np.random.default_rng(0)
+    entrada = sequencia_com_mascara()
+
+    variado = encoder.aumentar(entrada, rng)
+
+    assert variado.shape == entrada.shape
+
+
+def test_a_oclusao_marca_como_nao_medida_a_mao_que_ela_apagou():
+    """Se a máscara continuasse dizendo 'medi', o aumento estaria ensinando à
+    rede exatamente a mentira que a máscara existe para desmentir."""
+    rng = np.random.default_rng(7)
+    entrada = sequencia_com_mascara()
+
+    apagou_alguma = False
+    for _ in range(40):
+        variado = encoder.aumentar(
+            entrada, rng, rotacao_graus=0, escala=0, ruido=0, tempo=0, oclusao=1.0
+        )
+        mascara = variado[:, pose.TAMANHO_VETOR :]
+        if mascara.min() < 1.0:
+            apagou_alguma = True
+            # Some uma mão inteira por vez, nunca o corpo.
+            assert np.allclose(mascara[:, pose.POSE], 1.0)
+
+    assert apagou_alguma, "com oclusao=1.0 alguma mão tinha que ter sido apagada"
+
+
+def test_sem_oclusao_a_mascara_atravessa_intacta():
+    rng = np.random.default_rng(2)
+    entrada = sequencia_com_mascara()
+
+    variado = encoder.aumentar(
+        entrada, rng, rotacao_graus=0, escala=0, ruido=0, tempo=0, oclusao=0.0
+    )
+
+    assert np.allclose(variado[:, pose.TAMANHO_VETOR :], 1.0)
+
+
+def test_a_deformacao_temporal_move_geometria_e_mascara_pela_mesma_grade():
+    """Uma máscara reamostrada por outra grade descreveria outro instante do
+    sinal — pior que máscara nenhuma, porque a rede confiaria nela."""
+    rng = np.random.default_rng(4)
+    t = 16
+    rampa = np.linspace(0.0, 1.0, t, dtype=np.float32)[:, None]
+    entrada = np.concatenate(
+        [
+            np.repeat(rampa, pose.TAMANHO_VETOR, axis=1),
+            np.repeat(rampa, sequencia.TAMANHO_VALIDADE, axis=1),
+        ],
+        axis=-1,
+        dtype=np.float32,
+    )
+
+    variado = encoder.aumentar(
+        entrada, rng, rotacao_graus=0, escala=0, ruido=0, tempo=0.4, oclusao=0.0
+    )
+
+    geometria = variado[:, 0]
+    mascara = variado[:, pose.TAMANHO_VETOR]
+    assert np.allclose(geometria, mascara, atol=1e-5)
+
+
+def test_com_validade_muda_a_dimensao_de_entrada_do_modelo():
+    hp = encoder.Hiperparametros(com_validade=True)
+    sem = encoder.Hiperparametros(com_validade=False)
+
+    assert hp.dim_entrada == sem.dim_entrada + sequencia.NUM_GRUPOS_VALIDADE
+
+
+def test_com_validade_sobrevive_ao_salvar_e_carregar(tmp_path):
+    """Um `com_validade` que se perdesse no `.pt` montaria a entrada de um jeito
+    no treino e de outro no app, sem erro nenhum e com embedding sem sentido."""
+    modelo = encoder.Codificador(
+        encoder.Hiperparametros(
+            dimensao=16, oculto=8, camadas=1, dropout=0.0, com_validade=True
+        )
+    )
+    caminho = tmp_path / "encoder.pt"
+
+    encoder.salvar(modelo, caminho)
+    devolta = encoder.carregar(caminho)
+
+    assert devolta.hp.com_validade is True
+    assert devolta.hp.dim_entrada == modelo.hp.dim_entrada
+
+
+def test_um_pt_antigo_carrega_sem_validade():
+    """Backward-compat do campo novo: o padrão tem que descrever o que os
+    modelos já gravados fazem, e eles não viram máscara nenhuma."""
+    hp = encoder.Hiperparametros()
+
+    assert hp.com_validade is False

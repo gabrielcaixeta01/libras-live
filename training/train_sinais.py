@@ -50,7 +50,15 @@ from torch.nn import functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from libras import avaliacao, catalogo, config, encoder, nucleo, rejeicao  # noqa: E402
+from libras import (  # noqa: E402
+    avaliacao,
+    catalogo,
+    config,
+    encoder,
+    nucleo,
+    rejeicao,
+    sequencia,
+)
 from libras.dicionario import Dicionario  # noqa: E402
 
 # Quanto o encoder precisa multiplicar a baseline para que o torch entre por
@@ -63,7 +71,7 @@ MARGEM_CLARA = 1.5
 class Amostras:
     """Os protótipos extraídos, com tudo o que o rodízio precisa saber deles."""
 
-    vetores: np.ndarray  # (N, T, 147)
+    vetores: np.ndarray  # (N, T, 196) — 147 de geometria + 49 de máscara
     rotulos: list[str]
     fontes: list[str]
 
@@ -543,6 +551,7 @@ def montar_relatorio(
             f"entrada .................. 32×{hp.dim_entrada}"
             f" ({'posição + velocidade' if hp.com_velocidade else 'posição'}"
             f"{', configuração de mão' if hp.com_maos else ''}"
+            f"{', validade' if hp.com_validade else ''}"
             f"{', z-normalizada' if hp.z else ''})"
         ),
         (
@@ -800,6 +809,11 @@ def main() -> None:
         help="tira os canais de configuração de mão da entrada (ablação)",
     )
     ap.add_argument(
+        "--sem-validade",
+        action="store_true",
+        help="tira os canais de máscara de validade da entrada (ablação)",
+    )
+    ap.add_argument(
         "--pre-epocas",
         type=int,
         default=0,
@@ -860,6 +874,11 @@ def main() -> None:
         com_velocidade=not args.sem_velocidade,
         z=args.z,
         com_maos=config.ENC_MAOS_LOCAIS and not args.sem_maos,
+        com_validade=(
+            config.ENC_VALIDADE
+            and not args.sem_validade
+            and amostras.vetores.shape[-1] == sequencia.TAMANHO_COM_VALIDADE
+        ),
     )
     dispositivo = (
         torch.device(args.dispositivo)

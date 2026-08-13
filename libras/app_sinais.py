@@ -107,16 +107,20 @@ def carregar_busca(apenas_nucleo: bool = True) -> Busca:
     return Busca(
         dicionario=dicionario,
         representar=lambda pronta: encoder.codificar_medio(
-            modelo, pronta.vetores, config.ENC_TTA
+            modelo, pronta.vetores_com_validade, config.ENC_TTA
         ),
         prototipos=config.PROTOTIPOS_USUARIO_EMBEDDINGS,
     )
 
 
 def _busca_dtw(apenas_nucleo: bool = True) -> Busca:
+    # Com a máscara também aqui, mesmo o DTW não a usando: os protótipos que
+    # você ensina precisam ter a mesma largura dos que vieram do disco, senão
+    # `Dicionario.adicionar` recusa a re-ancoragem — que é a mitigação principal
+    # do viés dos três articuladores e não pode quebrar por causa do formato.
     return Busca(
         dicionario=carregar_dicionario(apenas_nucleo=apenas_nucleo),
-        representar=lambda pronta: pronta.vetores,
+        representar=lambda pronta: pronta.vetores_com_validade,
         prototipos=config.PROTOTIPOS_USUARIO,
     )
 

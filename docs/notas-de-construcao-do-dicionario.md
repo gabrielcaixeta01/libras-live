@@ -285,17 +285,12 @@ A flag `--z` continua no `train_sinais.py`, agora com número ao lado dela.
 
 ### O que ficou de fora, e por quê
 
-**A máscara de validade.** Era o segundo barato recomendado, e é o único item do
-plano que não foi executado. Ela é calculada, viaja em `Sequencia.validade` e é
-descartada por `vetores` — hoje um ponto imputado por spline entra na distância
-como se tivesse sido medido pela câmera.
+**A máscara de validade.** Era o segundo barato recomendado, e ficou de fora
+desta rodada por custo: os protótipos eram `(N, 32, 147)` e a máscara não cabia
+ali, então usá-la exigia mudar o formato e **re-extrair os 4.086 vídeos**.
 
-Usá-la não é uma linha: os protótipos são guardados como `(N, 32, 147)` em
-`dicionario.npz` e a máscara não cabe ali. Seria preciso mudar o formato do
-dicionário e **re-extrair os 4.086 vídeos** — 55 minutos. Não entrou porque a
-fase existia para responder se o encoder paga o torch, e a resposta não dependia
-disso. Fica como a próxima melhoria de representação, e agora com o custo
-explícito.
+Foi feito depois, e a resposta está em [A máscara de validade não
+pagou](#a-máscara-de-validade-não-pagou).
 
 ### A armadilha que apareceu no caminho
 
@@ -398,6 +393,51 @@ agora chama a mesma função que o treino.
 atravessar os dois lados pelo mesmo código. "Está desligado" não é uma defesa, é
 um adiamento.
 
+### A máscara de validade não pagou
+
+Era o último item barato da lista de melhorias de representação, e o único que
+exigia pagar antes de saber: os protótipos guardavam só geometria, então
+responder "a máscara ajuda?" custava mudar o formato do dicionário e **re-extrair
+os 4.086 vídeos**. 68 minutos para comprar uma medição.
+
+A hipótese era boa. A máscara mede exatamente o que a rede não tinha como saber:
+
+| grupo | fração de fato medida |
+|---|---|
+| mão esquerda | 89,5% |
+| mão direita | 88,4% |
+| corpo | 100,0% |
+
+**Um em cada nove frames de mão é invenção do PCHIP**, e até aqui a rede o
+consumia com o mesmo peso de um frame que a câmera viu. Dizer a ela quais são
+quais parecia obviamente certo.
+
+| entrada | semente 0 | semente 1 | semente 2 | média |
+|---|---|---|---|---|
+| sem validade | 45,1% | 44,1% | 45,9% | **45,0%** |
+| com validade | 44,5% | 45,5% | 44,5% | **44,8%** |
+
+−0,2 ponto, contra um piso de ruído de ±1,3. Não ajuda, e não atrapalha: é
+indistinguível de não ter feito nada.
+
+A leitura mais provável é que a informação **já estivesse lá**. Um trecho
+imputado por PCHIP é liso de um jeito que trecho medido não é — sem o tremor do
+landmark, sem a aceleração brusca —, e uma GRU bidirecional sobre 32 frames tem
+tudo de que precisa para notar isso sozinha. A máscara não trouxe informação
+nova, trouxe a mesma informação escrita de outro jeito.
+
+**O que fica.** O flag `ENC_VALIDADE`, desligado e com o número ao lado, e a
+máscara **guardada no dicionário** mesmo sem ser usada como entrada. Guardar
+custa 25% de disco; jogar fora custaria outra extração de 68 minutos para
+qualquer experimento futuro — pesar a distância do DTW por validade, por
+exemplo, que é uma ideia diferente desta e continua sem medição.
+
+**Lição:** "obviamente certo" e "medido" continuam sendo coisas diferentes,
+mesmo depois de cinco lembretes. Esta foi a sexta hipótese razoável a morrer no
+mesmo piso de ruído, e a primeira que cobrou uma hora de extração pelo
+privilégio. O custo de medir é o que decide a ordem da fila, não o quanto a
+ideia parece boa.
+
 ---
 
 ## O que vem depois
@@ -415,4 +455,4 @@ o que foi inventado.
 Enquanto isso o modo `--sinais` serve como demonstração do pipeline e como
 ferramenta pessoal: a re-ancoragem (`1`–`5`) contorna o problema para a sua
 própria mão, que é o caso de uso que funciona hoje — e agora ela contorna sobre
-uma representação que, no núcleo, acerta **45,5%** contra os 20,8% do DTW.
+uma representação que, no núcleo, acerta **45,1%** contra os 20,8% do DTW.

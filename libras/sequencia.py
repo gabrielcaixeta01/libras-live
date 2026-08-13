@@ -55,8 +55,26 @@ class Sequencia:
 
     @property
     def vetores(self) -> np.ndarray:
-        """(T, 147) — o formato que as métricas de busca consomem."""
+        """(T, 147) — só a geometria."""
         return pose.vetores(self.pontos)
+
+    @property
+    def vetores_com_validade(self) -> np.ndarray:
+        """(T, 196) — a geometria com a máscara grudada atrás dela.
+
+        É o formato **guardado em disco** e o que circula entre o extrator, o
+        dicionário e o encoder. A máscara viaja junto porque ela não é
+        recuperável depois: uma vez imputado, um ponto inventado é
+        indistinguível de um medido, e reconstruí-la custaria reprocessar o
+        vídeo.
+
+        Quem só quer a geometria chama `separar_validade` e ignora a segunda
+        metade — é o que a busca DTW faz, para continuar comparável à baseline
+        que foi medida antes desta mudança.
+        """
+        return np.concatenate(
+            [self.vetores, self.validade.astype(np.float32)], axis=-1, dtype=np.float32
+        )
 
     def __len__(self) -> int:
         return len(self.pontos)
@@ -65,6 +83,63 @@ class Sequencia:
 def validade(bruta: np.ndarray) -> np.ndarray:
     """(T, 49, 3) → (T, 49) booleano. Um ponto vale se as três coordenadas valem."""
     return np.isfinite(np.asarray(bruta, dtype=np.float32)).all(axis=2)
+
+
+# Largura da máscara e do vetor que a carrega. A máscara é guardada **ponto a
+# ponto**, e não já resumida: resumir é barato e reversível, re-extrair 4.086
+# vídeos para recuperar o que foi jogado fora não é. Quem consome decide o
+# resumo — hoje `validade_agrupada`, amanhã outro, sem tocar no disco.
+TAMANHO_VALIDADE = pose.NUM_PONTOS                              # 49
+TAMANHO_COM_VALIDADE = pose.TAMANHO_VETOR + TAMANHO_VALIDADE    # 196
+
+# Os três grupos que a máscara realmente distingue. O MediaPipe entrega uma mão
+# inteira ou nenhuma, então os 21 pontos de cada mão sobem e descem juntos; o
+# corpo cai ponto a ponto, mas quase nunca cai. Três canais carregam o que 49
+# diriam, e numa entrada de 414 canais com 2 gravações por classe a largura que
+# não informa é largura que atrapalha.
+NUM_GRUPOS_VALIDADE = 3
+
+
+def separar_validade(vetores: np.ndarray) -> tuple[np.ndarray, np.ndarray | None]:
+    """(..., T, 147 ou 196) → (geometria, máscara ou None).
+
+    Aceita os dois formatos de propósito: o dicionário em disco mudou de largura
+    quando a máscara passou a ser guardada, e um `.npz` antigo tem que continuar
+    carregando em vez de estourar. Sem máscara, o segundo elemento é None e quem
+    chamou decide se isso é um problema.
+    """
+    v = np.asarray(vetores, dtype=np.float32)
+    largura = v.shape[-1]
+
+    if largura == pose.TAMANHO_VETOR:
+        return v, None
+    if largura == TAMANHO_COM_VALIDADE:
+        return v[..., : pose.TAMANHO_VETOR], v[..., pose.TAMANHO_VETOR :]
+
+    raise ValueError(
+        f"esperado largura {pose.TAMANHO_VETOR} ou {TAMANHO_COM_VALIDADE}, "
+        f"recebido {largura}"
+    )
+
+
+def validade_agrupada(mascara: np.ndarray) -> np.ndarray:
+    """(..., T, 49) → (..., T, 3): fração medida da mão esquerda, da direita e do corpo.
+
+    Média e não mínimo: depois da reamostragem a máscara já é fracionária, e um
+    mínimo jogaria o grupo inteiro para zero por causa de um ponto. A média diz
+    *quanto* daquele grupo foi medido, que é a pergunta que o encoder tem
+    condição de usar.
+    """
+    m = np.asarray(mascara, dtype=np.float32)
+    if m.shape[-1] != TAMANHO_VALIDADE:
+        raise ValueError(f"esperado (..., T, {TAMANHO_VALIDADE}), recebido {m.shape}")
+
+    grupos = [
+        m[..., pose.MAO_ESQUERDA].mean(axis=-1),
+        m[..., pose.MAO_DIREITA].mean(axis=-1),
+        m[..., pose.POSE].mean(axis=-1),
+    ]
+    return np.stack(grupos, axis=-1).astype(np.float32)
 
 
 def imputar(bruta: np.ndarray) -> np.ndarray:
@@ -251,16 +326,22 @@ def caracteristicas(
     com_velocidade: bool = True,
     z: bool = False,
     com_maos: bool = False,
+    com_validade: bool = False,
     limite: float = LIMITE_PLAUSIVEL,
 ) -> np.ndarray:
-    """(..., T, 147) → (..., T, D): o que entra no encoder.
+    """(..., T, 147 ou 196) → (..., T, D): o que entra no encoder.
 
     Sempre limita a amplitude primeiro, porque tudo o que vem depois — a
     velocidade, o z-score, a rede — é sensível a um ponto inventado longe do
     corpo.
 
+    A entrada pode vir com ou sem a máscara grudada atrás (ver
+    `Sequencia.vetores_com_validade`). Vindo com, ela é separada antes de
+    qualquer conta: a máscara não é geometria e não pode entrar na velocidade,
+    no z-score nem no cálculo de escala das mãos.
+
     Args:
-        vetores: sequência já normalizada no corpo, de `Sequencia.vetores`.
+        vetores: sequência já normalizada no corpo, com ou sem máscara.
         com_velocidade: concatena a derivada temporal como canais extras.
         z: aplica `normalizar_z` na posição. Ver lá o que isso custa.
         com_maos: concatena `maos_locais` — a configuração de mão em escala
@@ -268,9 +349,27 @@ def caracteristicas(
             vista. A **derivada** desses canais foi medida e não entra: 41,0%
             de recall@5 contra 44,8% sem ela. Duplicar a largura da entrada com
             2 gravações por classe custa mais do que o dedo em movimento paga.
+        com_validade: concatena `validade_agrupada` — três canais dizendo quanto
+            de cada mão e do corpo foi de fato medido naquele frame. Sem eles um
+            ponto imputado entra na rede como se a câmera o tivesse visto.
         limite: amplitude máxima aceita, em larguras de ombro.
+
+    Raises:
+        ValueError: se `com_validade` e a entrada não trouxer máscara. Seguir em
+            frente inventaria três canais constantes e a rede aprenderia que
+            está tudo sempre medido — exatamente a mentira que o parâmetro
+            existe para desfazer.
     """
-    v = np.clip(np.asarray(vetores, dtype=np.float32), -limite, limite)
+    geometria, mascara = separar_validade(vetores)
+
+    if com_validade and mascara is None:
+        raise ValueError(
+            "com_validade=True mas a entrada tem largura "
+            f"{pose.TAMANHO_VETOR}, sem máscara. Use `Sequencia.vetores_com_validade` "
+            "ou reextraia o dicionário com `training/prepare_sinais.py`."
+        )
+
+    v = np.clip(geometria, -limite, limite)
 
     # Antes do z-score, que apagaria a escala de cada mão junto com a do corpo.
     locais = maos_locais(v) if com_maos else None
@@ -283,6 +382,8 @@ def caracteristicas(
         canais.append(np.clip(velocidade(v), -limite, limite))
     if locais is not None:
         canais.append(np.clip(locais, -limite, limite))
+    if com_validade:
+        canais.append(validade_agrupada(mascara))
 
     if len(canais) == 1:
         return canais[0]

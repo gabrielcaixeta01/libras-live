@@ -140,7 +140,9 @@ def processar(
         return (
             Resultado(
                 str(video),
-                pronta.vetores,
+                # Com a máscara: ela não é reconstituível depois da imputação, e
+                # recuperá-la custaria justamente esta extração de novo.
+                pronta.vetores_com_validade,
                 catalogo.rotulo_do_arquivo(video),
                 articulador,
                 None,
@@ -282,12 +284,32 @@ def _progresso(i: int, total: int, inicio: float, aceitos: int) -> None:
 
 
 def _retomar(parcial: Path):
+    """O que já foi extraído, ou nada — inclusive quando "nada" é a resposta certa.
+
+    Um parcial de uma versão anterior do extrator tem a largura antiga, e
+    continuar em cima dele misturaria vetores de 147 e de 196 canais no mesmo
+    array. O numpy aceitaria calado (viraria um array de objetos) e o estrago só
+    apareceria horas depois, no treino. Largura diferente da atual = recomeçar.
+    """
     if not parcial.exists():
         return [], [], [], set()
 
     dados = np.load(parcial, allow_pickle=False)
+    representacoes = dados["representacoes"]
+
+    if representacoes.ndim != 3 or (
+        representacoes.shape[-1] != sequencia.TAMANHO_COM_VALIDADE
+    ):
+        print(
+            f"parcial em {parcial} tem largura "
+            f"{representacoes.shape[-1] if representacoes.ndim == 3 else '?'}, "
+            f"e o extrator agora grava {sequencia.TAMANHO_COM_VALIDADE}. "
+            "Recomeçando a extração."
+        )
+        return [], [], [], set()
+
     return (
-        list(dados["representacoes"]),
+        list(representacoes),
         [str(r) for r in dados["rotulos"]],
         [str(f) for f in dados["fontes"]],
         {str(v) for v in dados["feitos"]},

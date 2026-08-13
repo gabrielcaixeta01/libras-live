@@ -333,3 +333,82 @@ def test_imputacao_nao_sai_do_intervalo_medido():
     validos = [v for v in medido if np.isfinite(v)]
     assert cheia.min() >= min(validos) - 1e-5
     assert cheia.max() <= max(validos) + 1e-5
+
+
+# --- a máscara de validade como representação ---
+
+
+def test_vetores_com_validade_carrega_geometria_e_mascara_lado_a_lado():
+    """O formato guardado em disco: 147 de geometria, 49 de máscara, nessa ordem.
+    Quem lê um npz do dicionário depende dessa ordem para separar de volta."""
+    pronta = sequencia.preparar(bruta(12), t_alvo=8)
+
+    juntos = pronta.vetores_com_validade
+
+    assert juntos.shape == (8, sequencia.TAMANHO_COM_VALIDADE)
+    assert np.allclose(juntos[:, : pose.TAMANHO_VETOR], pronta.vetores)
+    assert np.allclose(juntos[:, pose.TAMANHO_VETOR :], pronta.validade)
+
+
+def test_separar_validade_aceita_os_dois_formatos():
+    """Um dicionário extraído antes desta mudança tem 147 canais e precisa
+    continuar carregando — sem máscara, mas carregando."""
+    largo = np.zeros((4, sequencia.TAMANHO_COM_VALIDADE), dtype=np.float32)
+    estreito = np.zeros((4, pose.TAMANHO_VETOR), dtype=np.float32)
+
+    geo_largo, mascara = sequencia.separar_validade(largo)
+    geo_estreito, sem_mascara = sequencia.separar_validade(estreito)
+
+    assert geo_largo.shape == (4, pose.TAMANHO_VETOR)
+    assert mascara.shape == (4, sequencia.TAMANHO_VALIDADE)
+    assert geo_estreito.shape == (4, pose.TAMANHO_VETOR)
+    assert sem_mascara is None
+
+
+def test_separar_validade_recusa_largura_que_nao_e_nenhum_dos_dois():
+    with pytest.raises(ValueError, match="largura"):
+        sequencia.separar_validade(np.zeros((4, 99), dtype=np.float32))
+
+
+def test_validade_agrupada_resume_nas_tres_partes_que_o_mediapipe_perde():
+    mascara = np.zeros((3, sequencia.TAMANHO_VALIDADE), dtype=np.float32)
+    mascara[:, pose.MAO_ESQUERDA] = 1.0
+    mascara[:, pose.POSE] = 0.5
+
+    grupos = sequencia.validade_agrupada(mascara)
+
+    assert grupos.shape == (3, sequencia.NUM_GRUPOS_VALIDADE)
+    assert np.allclose(grupos[:, 0], 1.0)   # mão esquerda inteira
+    assert np.allclose(grupos[:, 1], 0.0)   # mão direita ausente
+    assert np.allclose(grupos[:, 2], 0.5)   # corpo pela metade
+
+
+def test_caracteristicas_com_validade_acrescenta_tres_canais_no_fim():
+    pronta = sequencia.preparar(bruta(12), t_alvo=8)
+
+    sem = sequencia.caracteristicas(pronta.vetores_com_validade, com_validade=False)
+    com = sequencia.caracteristicas(pronta.vetores_com_validade, com_validade=True)
+
+    assert com.shape[-1] == sem.shape[-1] + sequencia.NUM_GRUPOS_VALIDADE
+    assert np.allclose(com[..., : sem.shape[-1]], sem)
+
+
+def test_caracteristicas_recusa_validade_que_nao_veio():
+    """Silenciosamente inventar três canais constantes ensinaria a rede que está
+    tudo sempre medido — a mentira exata que o parâmetro existe para desfazer."""
+    pronta = sequencia.preparar(bruta(12), t_alvo=8)
+
+    with pytest.raises(ValueError, match="sem máscara"):
+        sequencia.caracteristicas(pronta.vetores, com_validade=True)
+
+
+def test_a_mascara_nao_contamina_a_geometria():
+    """A máscara não é coordenada: se ela entrasse na velocidade ou no cálculo
+    de escala das mãos, os canais de geometria mudariam de valor só por ela
+    estar presente."""
+    pronta = sequencia.preparar(bruta(12), t_alvo=8)
+
+    de_147 = sequencia.caracteristicas(pronta.vetores, com_maos=True)
+    de_196 = sequencia.caracteristicas(pronta.vetores_com_validade, com_maos=True)
+
+    assert np.allclose(de_147, de_196)

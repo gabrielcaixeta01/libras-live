@@ -32,7 +32,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import catalogo, dtw
+from . import catalogo, dtw, pose, sequencia
 
 FONTE_USUARIO = "voce"
 
@@ -48,7 +48,32 @@ class Candidato:
 
 
 def _metrica_dtw(consulta: np.ndarray, base: np.ndarray) -> np.ndarray:
-    return dtw.distancias(consulta, base)
+    """DTW sobre a geometria, ignorando a máscara de validade que vier junto.
+
+    Os protótipos passaram a guardar 196 canais (147 de geometria + 49 de
+    máscara) para que o encoder pudesse usar a máscara. O DTW não a usa: a
+    baseline foi medida sem ela, e deixar 49 canais binários entrarem na
+    distância mudaria o número sem que ninguém tivesse pedido — um dicionário
+    com as duas mãos perdidas ficaria "perto" de outro pelo mesmo motivo errado.
+
+    Pesar a distância pela validade é uma ideia melhor e é trabalho à parte;
+    fica registrada como tal em vez de acontecer por acidente aqui.
+    """
+    return dtw.distancias(_so_geometria(consulta), _so_geometria(base))
+
+
+def _so_geometria(representacao: np.ndarray) -> np.ndarray:
+    """Tira os canais de máscara, se e só se a largura for a do formato real.
+
+    Tolerante de propósito: `Dicionario` é um contêiner genérico de vetores por
+    tempo e os testes o exercitam com larguras pequenas e inventadas. Exigir 147
+    ou 196 aqui transformaria uma otimização de formato numa restrição sobre o
+    que o dicionário pode guardar.
+    """
+    v = np.asarray(representacao, dtype=np.float32)
+    if v.shape[-1] == sequencia.TAMANHO_COM_VALIDADE:
+        return v[..., : pose.TAMANHO_VETOR]
+    return v
 
 
 def _metrica_cosseno(consulta: np.ndarray, base: np.ndarray) -> np.ndarray:

@@ -169,7 +169,12 @@ def test_sem_encoder_o_app_usa_a_baseline_dtw(caminhos, caminhos_encoder):
 
     assert busca.dicionario.metrica == "dtw"
     assert busca.prototipos == app_sinais.config.PROTOTIPOS_USUARIO
-    assert busca.representar(gravacao_pronta()).shape == (sequencia.T_PADRAO, 147)
+    # Com a máscara junto, mesmo o DTW não a usando: o protótipo que você ensina
+    # tem que ter a largura dos que vieram do disco, senão a re-ancoragem quebra.
+    assert busca.representar(gravacao_pronta()).shape == (
+        sequencia.T_PADRAO,
+        sequencia.TAMANHO_COM_VALIDADE,
+    )
 
 
 def test_com_encoder_a_consulta_vira_embedding(caminhos, caminhos_encoder):

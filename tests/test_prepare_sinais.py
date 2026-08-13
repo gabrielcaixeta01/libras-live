@@ -132,7 +132,12 @@ def test_parcial_sobrevive_ao_ida_e_volta(tmp_path: Path):
     (caro) ou pularia vídeos que faltam (silenciosamente incompleto).
     """
     parcial = tmp_path / "dic.parcial.npz"
-    reps = [np.zeros((sequencia.T_PADRAO, 147), dtype=np.float32) for _ in range(3)]
+    reps = [
+        np.zeros(
+            (sequencia.T_PADRAO, sequencia.TAMANHO_COM_VALIDADE), dtype=np.float32
+        )
+        for _ in range(3)
+    ]
     rotulos = ["CASA", "ÁGUA", "LIVRO"]
     fontes = ["articulador_1", "articulador_2", "articulador_1"]
     feitos = {"/a/casa.mp4", "/b/agua.mp4", "/a/livro.mp4"}
@@ -152,3 +157,23 @@ def test_retomar_sem_arquivo_comeca_do_zero(tmp_path: Path):
     reps, rotulos, fontes, feitos = prepare_sinais._retomar(tmp_path / "nao_existe.npz")
 
     assert (reps, rotulos, fontes, feitos) == ([], [], [], set())
+
+
+def test_parcial_de_largura_antiga_recomeca_em_vez_de_misturar(tmp_path: Path):
+    """Continuar em cima de um parcial de 147 canais empilharia vetores de duas
+    larguras no mesmo array. O numpy aceitaria calado — viraria array de objetos
+    — e o estrago só apareceria horas depois, no treino."""
+    parcial = tmp_path / "dic.parcial.npz"
+    antigos = [
+        np.zeros((sequencia.T_PADRAO, 147), dtype=np.float32) for _ in range(3)
+    ]
+    prepare_sinais._salvar_parcial(
+        parcial, antigos, ["CASA", "ÁGUA", "LIVRO"], ["a", "b", "a"], {"/a.mp4"}
+    )
+
+    reps, rotulos, fontes, feitos = prepare_sinais._retomar(parcial)
+
+    assert reps == []
+    assert rotulos == []
+    assert fontes == []
+    assert feitos == set()

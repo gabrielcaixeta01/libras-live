@@ -54,7 +54,7 @@ O vocabulário é **curado e pequeno de propósito**: 163 sinais do cotidiano
 (saudações, cortesia, família, necessidades, tempo, perguntas), não as 1.364
 palavras do V-LIBRASIL. A razão está medida em
 [Sinais: o dicionário reverso](#sinais-o-dicionário-reverso) — com 1.364
-candidatos a resposta certa aparece em 16,4% das consultas, e com 163 em 45,5%.
+candidatos a resposta certa aparece em 16,4% das consultas, e com 163 em 45,1%.
 `--tudo` devolve o vocabulário inteiro para quem preferir cobertura a acerto.
 
 Não traduz Libras como língua: **frases**, gramática espacial, concordância
@@ -140,7 +140,7 @@ por mais longa que ela seja.
 
 `landmarks.normalizar`, `stabilizer`, `speller`, `sampling` e `practice` são
 **lógica pura**: numpy entra, numpy sai, nenhum relógio e nenhuma câmera lá
-dentro. O tempo entra sempre por parâmetro. É por isso que 380 testes rodam em
+dentro. O tempo entra sempre por parâmetro. É por isso que 422 testes rodam em
 segundos sem webcam e sem modelo treinado — e é por isso que a parte que pode dar
 errado é a parte que está testada.
 
@@ -799,7 +799,7 @@ O recorte foi medido nos dois caminhos, no mesmo leave-one-articulator-out:
 | encoder treinado em tudo | 1.363 sinais | 16,4% | 7,2% | 10,5% |
 | DTW | núcleo | 20,8% | 8,2% | 12,6% |
 | encoder treinado em tudo | núcleo | 36,1% | 20,6% | 26,0% |
-| **encoder treinado no núcleo** | **núcleo** | **45,5%** | **26,5%** | **33,6%** |
+| **encoder treinado no núcleo** | **núcleo** | **45,1%** | **24,3%** | **31,8%** |
 
 **6,3x a baseline original**, e o caminho até lá tem três partes que se somam:
 recortar o índice vale 2,9x sozinho (7,2% → 20,8%, sem tocar em nada), aprender a
@@ -839,7 +839,7 @@ resolve no alfabeto.
 
 O corte saiu do mesmo protocolo, de graça: as gravações dos **1.200 sinais fora
 do núcleo**, feitas pelo articulador de teste, são consultas que não têm resposta
-possível. Foram 267 delas contra as 490 de dentro.
+possível. Foram 269 delas contra as 490 de dentro.
 
 Há dois critérios possíveis, e eles perguntam coisas diferentes. **Distância**:
 "isto parece com alguma coisa?". **Margem** entre o primeiro e o segundo
@@ -849,8 +849,8 @@ calibrados na mesma cobertura de 95% dos acertos:
 
 | critério | corte | listas com resposta | invenção cortada |
 |---|---|---|---|
-| **distância** | **0,5384** | **47,0%** | **10,5%** |
-| margem | 0,0087 | 46,5% | 8,6% |
+| **distância** | **0,5307** | **46,9%** | **11,5%** |
+| margem | 0,0101 | 45,8% | 7,4% |
 
 A distância ganha, e é ela que fica ligada. Ligar as duas não soma: cada uma
 gasta seus 5% de cobertura por conta própria, e juntas jogariam fora ~10% dos
@@ -860,13 +860,13 @@ A tabela completa da distância, para quem quiser outro ponto de operação:
 
 | cobertura dos acertos | corte | listas com resposta | invenção cortada |
 |---|---|---|---|
-| 99,1% | 0,5803 | 45,9% | 2,6% |
-| **95,1%** | **0,5384** | **47,0%** | **10,5%** |
-| 90,1% | 0,5038 | 48,4% | 19,9% |
-| 80,3% | 0,4603 | 51,0% | 35,6% |
+| 99,1% | 0,5547 | 46,8% | 7,4% |
+| **95,0%** | **0,5307** | **46,9%** | **11,5%** |
+| 90,0% | 0,4927 | 49,3% | 23,8% |
+| 80,1% | 0,4682 | 50,0% | 34,2% |
 
 **As duas distribuições se sobrepõem, e a tabela não esconde isso.** No corte
-escolhido o app recusa 10,5% das consultas sem resposta e paga pouco mais de um
+escolhido o app recusa 11,5% das consultas sem resposta e paga pouco mais de um
 ponto de recall@5 por isso. A distância do cosseno não é confiança, e enquanto
 ela for o único sinal disponível a rejeição fica nesse patamar — presente,
 honesta, e pequena.
@@ -898,7 +898,7 @@ libras/
   app.py           só o CLI: lê os argumentos e escolhe o modo
   app_sinais.py    o laço do dicionário reverso
   pose.py          os 49 pontos e a normalização ancorada no corpo
-  sequencia.py     imputação PCHIP, reamostragem, validade, canais de mão
+  sequencia.py     imputação PCHIP, reamostragem, máscara de validade, canais de mão
   segmenter.py     quando um sinal começa e quando acaba
   dtw.py           distância com alinhamento temporal, em lote
   encoder.py       GRU bidirecional → embedding 256d (único lugar com torch)
@@ -935,7 +935,7 @@ training/
   eval_sinais.py       leave-one-articulator-out da baseline DTW
   train_sinais.py      treina o encoder e mede se ele paga o torch
 
-tests/            407 testes, espelhando a mesma divisão
+tests/            422 testes, espelhando a mesma divisão
 scripts/
   download_model.sh       modelos do MediaPipe (~17 MB)
   download_vlibrasil.sh   base de sinais do espelho no Kaggle (~10,8 GB)
@@ -1004,6 +1004,7 @@ Do encoder neural:
 | `ENC_AUG_*` | — | rotação, escala, ruído e deformação de ritmo do aumento |
 | `ENC_AUG_OCLUSAO` | 0,0 | apagar uma mão por um trecho; medido e desligado |
 | `ENC_TTA` | 1 | versões aumentadas por gravação ao codificar; medido e desligado |
+| `ENC_VALIDADE` | `False` | máscara de validade como canal de entrada; medido e desligado |
 | `VOCABULARIO_ABERTO` | 200 | sinais fora do treino, medidos à parte |
 | `BASELINE_DTW_RECALL5` | ver `config.py` | o número a bater no vocabulário inteiro |
 | `BASELINE_DTW_NUCLEO_RECALL5` | ver `config.py` | o número a bater no núcleo |
@@ -1022,7 +1023,7 @@ uma palavra que não exista no V-LIBRASIL em vez de deixá-la sumir em silêncio
 python -m pytest tests/ -q
 ```
 
-407 testes, ~5s, sem câmera, sem vídeo, sem dataset e sem modelo treinado.
+422 testes, ~5s, sem câmera, sem vídeo, sem dataset e sem modelo treinado.
 Cobrem normalização (das duas), estabilização, soletração, aumento de dados,
 recuperação de imagens, rejeição, diversidade da coleta, modo prática, imputação
 temporal, segmentação de sinais, DTW, busca no dicionário, re-ancoragem, as
@@ -1063,20 +1064,20 @@ N antes da cascata de recuperação.
 modelo tem todo incentivo para aprender as pessoas. O leave-one-articulator-out
 mede isso e a re-ancoragem corrige no uso — mas a base é essa.
 
-**recall@5 de 45,5% no vocabulário núcleo.** Medido, não estimado: 490 consultas
+**recall@5 de 45,1% no vocabulário núcleo.** Medido, não estimado: 490 consultas
 em leave-one-articulator-out. A busca está correta (auto-recuperação 6/6) e os
 vetores são sadios — o que falha é a representação generalizar entre pessoas, e
 as três coisas que ajudaram foram recortar o vocabulário, treinar o encoder nele
 e dar à rede a configuração de mão em escala própria.
 
-**45,5% ainda não é um dicionário que você usa sem pensar**: em uma de cada duas
+**45,1% ainda não é um dicionário que você usa sem pensar**: em uma de cada duas
 consultas a palavra certa não aparece. É utilizável para explorar e para
 aprender, e é 6x o ponto de partida. Com três gravações por sinal o gargalo que
 resta é dado e não objetivo — e a re-ancoragem é o que empurra esse número para
 cima na sua própria mão, sem retreinar nada.
 
 **O vocabulário é 163 palavras.** Tudo fora dele o app erra por construção, e o
-limiar de rejeição só pega 10,5% desses casos. Sinalizar algo que não está na
+limiar de rejeição só pega 11,5% desses casos. Sinalizar algo que não está na
 lista quase sempre devolve cinco palavras erradas com aparência de resposta.
 
 **Sem expressão facial.** É fonema em Libras, e sinais que só diferem por ela
@@ -1111,10 +1112,18 @@ a rede simplesmente não os via. Ancorados no pulso e em escala de mão, valem
 **+9,4 pontos** de recall@5 — a única mudança de representação que passou do
 ruído de semente (±1,3 ponto) por margem larga.
 
-Cinco hipóteses foram medidas e **rejeitadas** no caminho, e ficam registradas
+~~6. A máscara de validade na representação.~~ **Feito, e rejeitado.** Um em
+cada nove frames de mão é imputado, e a rede os consumia como se a câmera os
+tivesse visto — dizer a ela quais eram quais parecia obviamente certo. Custou
+uma re-extração dos 4.086 vídeos para descobrir que não muda nada: 44,8% contra
+45,0%, dentro do ruído. A máscara continua **guardada** no dicionário, porque
+jogá-la fora cobraria outra extração de qualquer experimento futuro.
+
+Seis hipóteses foram medidas e **rejeitadas** no caminho, e ficam registradas
 porque medir custou mais que implementar: aumento por oclusão, TTA, velocidade
 da mão em escala própria, pré-treino no vocabulário inteiro seguido de
-especialização, e variações de dropout. Nenhuma saiu do ruído; duas pioraram.
+especialização, variações de dropout, e a máscara de validade. Nenhuma saiu do
+ruído; duas pioraram.
 
 Em ordem de valor:
 
@@ -1129,22 +1138,17 @@ Em ordem de valor:
    isso, e o encoder transferiria: os 36,1% da linha "treinado em tudo" já
    provam que a representação atravessa vocabulários. É o item mais caro e o de
    maior teto.
-3. **A máscara de validade na representação.** Ela é calculada, viaja em
-   `Sequencia.validade` e é **descartada** por `vetores` — hoje um ponto imputado
-   entra na distância como se tivesse sido medido. Usá-la exige guardar a máscara
-   junto dos protótipos, o que muda o formato do `dicionario.npz` e custa uma
-   re-extração de 55 min. É a última melhoria barata que sobrou na representação.
-4. **Uma rejeição que funcione.** A atual corta 10,5% das consultas sem resposta
+3. **Uma rejeição que funcione.** A atual corta 11,5% das consultas sem resposta
    porque a distância do cosseno não é confiança. A margem entre o primeiro e o
-   segundo candidato foi medida e é *pior* (8,6%) — o que falta não é outro
+   segundo candidato foi medida e é *pior* (7,4%) — o que falta não é outro
    critério sobre a mesma distância, é um sinal de confiança de verdade, e o
    único caminho barato para ele é uma cabeça treinada para prever acerto.
-5. **Conjunto de avaliação separado do alfabeto.** Uma sessão de gravação em
+4. **Conjunto de avaliação separado do alfabeto.** Uma sessão de gravação em
    outro dia, outra luz, outra roupa, usada só como teste. É o que transforma
    "achei que melhorou" em evidência.
-6. **Features geométricas no alfabeto** — ângulos entre dedos e distâncias
+5. **Features geométricas no alfabeto** — ângulos entre dedos e distâncias
    ponta-a-ponta somados às coordenadas cruas, mirando U/V e B/W.
-7. **Autocorreção com dicionário PT-BR** — um erro em dez letras arruína a
+6. **Autocorreção com dicionário PT-BR** — um erro em dez letras arruína a
    palavra inteira; a palavra em andamento já aparece destacada.
 
 ---

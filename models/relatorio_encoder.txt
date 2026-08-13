@@ -3,7 +3,7 @@ ENCODER NEURAL DE SINAIS — leave-one-articulator-out
 ========================================================================
 
 arquitetura .............. GRU bidirecional 2x256 → embedding 256d
-entrada .................. 32×414 (posição + velocidade)
+entrada .................. 32×414 (posição + velocidade, configuração de mão)
 perda .................... ArcFace (margem 0.3, escala 32.0)
 épocas por rodízio ....... 60
 protótipos ............... 490
@@ -11,17 +11,17 @@ sinais distintos ......... 163
 vocabulário do índice .... núcleo, 163 sinais (e o treino também)
 vocabulário aberto ....... 0 sinais fora do treino
 dispositivo .............. mps
-tempo total .............. 1.1 min
+tempo total .............. 1.2 min
 
 ------------------------------------------------------------------------
 RODÍZIOS
 ------------------------------------------------------------------------
 
-  sem articulador_1   164 consultas   recall@1  26.2%   recall@5  45.7%   MRR  34.0%
-  sem articulador_2   163 consultas   recall@1  23.3%   recall@5  40.5%   MRR  29.8%
-  sem articulador_3   163 consultas   recall@1  30.1%   recall@5  50.3%   MRR  37.0%
+  sem articulador_1   164 consultas   recall@1  26.2%   recall@5  48.8%   MRR  34.5%
+  sem articulador_2   163 consultas   recall@1  22.1%   recall@5  39.3%   MRR  28.7%
+  sem articulador_3   163 consultas   recall@1  24.5%   recall@5  47.2%   MRR  32.3%
 
-  TOTAL              490 consultas   recall@1  26.5%   recall@5  45.5%   MRR  33.6%
+  TOTAL              490 consultas   recall@1  24.3%   recall@5  45.1%   MRR  31.8%
 
 ------------------------------------------------------------------------
 LIMIAR DE REJEIÇÃO
@@ -29,7 +29,7 @@ LIMIAR DE REJEIÇÃO
 
   Quando o app deve dizer 'não reconheci' em vez de mostrar cinco
   palavras. Sem limiar ele sempre responde, e com 163 sinais no índice
-  quase tudo que existe está fora dele — as 267 consultas sem
+  quase tudo que existe está fora dele — as 269 consultas sem
   resposta possível abaixo são o caso que ele existe para pegar.
 
   DISTÂNCIA: recusa quando o melhor candidato está longe.
@@ -38,33 +38,33 @@ LIMIAR DE REJEIÇÃO
 
   DISTANCIA
    cobertura    corte  listas com resposta  invenção cortada
-      99.1%   0.5803                45.9%              2.6%
-      95.1%   0.5384                47.0%             10.5% <-
-      90.1%   0.5038                48.4%             19.9%
-      80.3%   0.4603                51.0%             35.6%
+      99.1%   0.5547                46.8%              7.4%
+      95.0%   0.5307                46.9%             11.5% <-
+      90.0%   0.4927                49.3%             23.8%
+      80.1%   0.4682                50.0%             34.2%
 
   MARGEM
    cobertura    corte  listas com resposta  invenção cortada
-      99.1%   0.0026                46.2%              3.7%
-      95.1%   0.0087                46.5%              8.6% <-
-      90.1%   0.0154                46.6%             13.9%
-      80.3%   0.0319                47.5%             25.8%
+      99.1%   0.0030                45.8%              3.7%
+      95.0%   0.0101                45.8%              7.4% <-
+      90.0%   0.0175                45.7%             12.3%
+      80.1%   0.0309                45.7%             21.9%
 
   Na cobertura de 95%, quem corta mais invenção é a
-  **distancia**: 10.5% contra 8.6%.
+  **distancia**: 11.5% contra 7.4%.
   A coluna que decide não é essa, e sim a cobertura: num dicionário uma
   lista errada custa um olhar, e um acerto apagado custa a resposta.
 
   Ponha em config:
-    REJEICAO_COSSENO = 0.5384
-    REJEICAO_MARGEM = 0.0087
+    REJEICAO_COSSENO = 0.5307
+    REJEICAO_MARGEM = 0.0101
 
 ------------------------------------------------------------------------
 VEREDITO SOBRE O TORCH
 ------------------------------------------------------------------------
 
   baseline DTW (mesmo protocolo) .... recall@5 20.8%  [núcleo, 163 sinais]
-  encoder .......................... recall@5 45.5%
+  encoder .......................... recall@5 45.1%
 
   O TORCH ENTRA. 2.2x a baseline DTW no mesmo
   protocolo, com o mesmo dado e a mesma busca. A representação era o

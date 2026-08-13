@@ -106,15 +106,15 @@ SEGUNDOS_MOSTRANDO = 4.0  # quanto tempo o resultado fica na tela
 # CONFIANCA_REJEICAO resolve no alfabeto.
 #
 # Calibrado por training/train_sinais.py --treino-nucleo: o quantil 95% das
-# distâncias que acertaram, medido nos rodízios junto com 307 gravações de
+# distâncias que acertaram, medido nos rodízios junto com 269 gravações de
 # sinais fora do núcleo. Ver models/relatorio_encoder.txt.
 #
 # **O que ele compra é pouco, e o relatório mostra isso.** As duas distribuições
-# se sobrepõem: preservando 95% dos acertos, o corte recusa só 10,5% das consultas
+# se sobrepõem: preservando 95% dos acertos, o corte recusa só 11,5% das consultas
 # que não tinham resposta. Custa pouco mais de 1 ponto de recall@5 e em troca o
 # app para de inventar nos piores casos. A distância do cosseno não é confiança,
 # e enquanto ela for o único sinal disponível o limiar fica assim.
-REJEICAO_COSSENO: float | None = 0.5384
+REJEICAO_COSSENO: float | None = 0.5307
 
 # O segundo critério, e ele mede outra coisa: não "isto parece com alguma
 # coisa?" e sim "isto parece com **uma** coisa?". Um sinal que o dicionário não
@@ -123,10 +123,10 @@ REJEICAO_COSSENO: float | None = 0.5384
 # o app recusa. Ver `libras/rejeicao.py` e o relatório do encoder.
 #
 # **Fica desligado, e o relatório é quem decide.** Calibrados na mesma cobertura
-# de 95%, a margem corta 8,6% da invenção e a distância corta 10,5% — a distância
+# de 95%, a margem corta 7,4% da invenção e a distância corta 11,5% — a distância
 # ganha. Ligar os dois não soma: cada um gasta 5% da cobertura por conta própria,
 # e juntos jogariam fora ~10% dos acertos para cortar pouco mais que o melhor
-# deles sozinho. O corte medido da margem, se você quiser trocar, é 0,0087.
+# deles sozinho. O corte medido da margem, se você quiser trocar, é 0,0101.
 REJEICAO_MARGEM: float | None = None
 
 # A baseline DTW não tem limiar calibrado: a distância dela não tem a mesma
@@ -194,6 +194,25 @@ ENC_AUG_OCLUSAO = 0.0
 # ruído por margem larga. Fica aqui, e não no padrão de `Hiperparametros`,
 # porque o padrão de lá precisa continuar descrevendo os modelos já gravados.
 ENC_MAOS_LOCAIS = True
+
+# A máscara de validade como canal de entrada — três números por frame dizendo
+# quanto da mão esquerda, da direita e do corpo foi de fato medido, contra o que
+# `sequencia.imputar` inventou.
+#
+# **Medido e desligado.** Era a última melhoria barata de representação que
+# restava, e custou uma re-extração dos 4.086 vídeos para ser respondida:
+# 44,8% de recall@5 com ela contra 45,0% sem, três sementes de cada lado —
+# dentro do ruído, e do lado errado dele. A hipótese era boa (11% dos frames de
+# mão são imputados, e a rede os consumia como medição) e mesmo assim não pagou.
+# A leitura mais provável é que a informação já esteja implícita: um trecho
+# imputado por PCHIP é liso de um jeito que trecho medido não é, e a GRU
+# provavelmente já lia isso na própria geometria.
+#
+# A máscara continua **guardada** no dicionário (196 canais em vez de 147),
+# porque jogá-la fora custaria outra extração de 68 min para qualquer
+# experimento futuro — pesar a distância do DTW por validade, por exemplo, que é
+# uma ideia diferente e não foi medida. Ligar aqui volta a usá-la como entrada.
+ENC_VALIDADE = False
 
 # Quantas versões aumentadas da mesma gravação entram na média do embedding —
 # ver `encoder.codificar_medio`. Também medido e desligado: 47,1% contra 46,7%,
